@@ -8,3 +8,4 @@ Introduction
     installation
     conventions
     contributing
+    tips_and_tricks
