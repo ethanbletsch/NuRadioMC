@@ -452,7 +452,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
     def sample_lateral_cross_section(
             self,
             traces, times, station_positions,
-            shower_axis_inital, core, depth, cs,
+            shower_axis_inital, core, depth, cs: coordinatesystems.cstrafo,
             shower_axis_mc, core_mc,
             relative=False, initial_grid_spacing=100, centered_around_truth=True,
             cross_section_size=1000, deg_resolution=np.deg2rad(0.005)):
@@ -497,6 +497,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         
         centered_around_truth : bool
             True
+            Request lateral grid search centred on the MC provided truth. Ignored if relative == True
 
         cross_section_size : int
             1000
@@ -523,8 +524,8 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
         # we use the true core to make sure that it is within the inital search gri
         mc_at_plane = interferometry.get_intersection_between_line_and_plane(
-            shower_axis_inital, p_axis, shower_axis_mc, core_mc)
-        mc_vB = cs.transform_to_vxB_vxvxB(mc_at_plane, core=p_axis)
+            shower_axis_inital, p_axis, shower_axis_mc, core_mc) # gives interserction between a plane normal to the shower axis initial guess (shower_axis_inital) anchored at a point in this vB plane at the requested height/depth along the initial axis (p_axis), with the true/montecarlo shower axis anchored at the true/mc core
+        mc_vB = cs.transform_to_vxB_vxvxB(mc_at_plane, core=p_axis) # could instead use p_axis if no mc available?
         # mc_points.append(mc_at_plane + core)
 
         dr_ref_target = np.tan(deg_resolution) * dist
@@ -808,6 +809,7 @@ def get_geometry_and_transformation(shower):
 
     zenith = shower[shp.zenith]
     azimuth = shower[shp.azimuth]
+    # if only lora: see line 161-162 of ./LOFAR/beamformingDirectionFitter_LOFAR.py
     magnetic_field_vector = shower[shp.magnetic_field_vector]
 
     shower_axis = hp.spherical_to_cartesian(zenith, azimuth)
