@@ -8,52 +8,31 @@ import numpy as np
 # import NuRadioReco.framework.station
 from radiotools.coordinatesystems import cstrafo
 from NuRadioReco.utilities import units
-import cr_pulse_interpolator.signal_interpolation_fourier as sigF
+import cr_pulse_interpolator.signal_interpolation_fourier as sigF  # traces
+import cr_pulse_interpolator.interpolation_fourier as fluF  # fluence
 from typing import Optional
 import h5py
 import logging
 
 
+logger = logging.getLogger("NuRadioReco.readCoREASInterpolator")
+
+
 class readCoREASInterpolator():
     def __init__(self) -> None:
         self.signal_interpolator = sigF.interp2d_signal()
-        self.logger = logging.getLogger("NuRadioReco.readCoREASInterpolator")
 
     def begin(self, filename, logger_level=logging.WARNING):
         self.corsika = h5py.File(filename)
-        self.logger.setLevel(logger_level)
+        logger.setLevel(logger_level)
         pass
 
     @register_run()
     def run(self, det: DetectorBase, requested_channel_ids: Optional[dict] = None, core_shift: Optional[np.ndarray] = None):
         for station_id in det.get_station_ids():
-            # station = det.get_station(station_id)
-            station_channel_ids = det.get_channel_ids(station_id)
-            if requested_channel_ids is not None and station_id in requested_channel_ids.keys():
-                requested_set = set(requested_channel_ids[station_id])
-                if not requested_set.issubset(set(station_channel_ids)):
-                    # keep as raise ValueError or send to logger.warning?
-                    raise ValueError(
-                        f"`requested_channel_ids` at station {station_id} is not a subset of available channel ids; {requested_set.difference(set(station_channel_ids))} not found.")
-                channel_ids = requested_channel_ids[station_id]
-            else:
-                channel_ids = station_channel_ids
 
-            simpos = []
-            for i, observer in enumerate(self.corsika['CoREAS']['observers'].values()):
-                position = observer.attrs['position']
-                simpos.append(
-                    np.array([-position[1], position[0], 0]) * units.cm)
-                self.logger.debug("({:.0f}, {:.0f})".format(
-                    position[0], position[1]))
-            simpos = np.array(simpos)
-
-            simpos_vBvvB = cs.transform_from_magnetic_to_geographic(simpos.T)
-            simpos_vBvvB = cs.transform_to_vxB_vxvxB(simpos_vBvvB).T
-            dd = (simpos_vBvvB[:, 0] ** 2 + simpos_vBvvB[:, 1] ** 2) ** 0.5
-            ddmax = dd.max()
-            self.logger.info(
-                "star shape from: {} - {}".format(-dd.max(), dd.max()))
+            channel_ids = select_channels(
+                requested_channel_ids, det, station_id)
 
             station_position = det.get_absolute_position(station_id)
             ground_channel_positions = np.array(
@@ -75,13 +54,47 @@ class readCoREASInterpolator():
         pass
 
 
+def get_corsika_pos_showerplane(corsika: h5py.File, cs: cstrafo):
+    starpos = []
+    for observer in corsika['CoREAS']['observers'].values():
+        position = observer.attrs['position']
+        starpos.append(
+            np.array([-position[1], position[0], 0]) * units.cm)
+        logger.debug("({:.0f}, {:.0f})".format(
+            position[0], position[1]))
+    starpos = np.array(starpos)
+
+    starpos_vBvvB = cs.transform_from_magnetic_to_geographic(starpos.T)
+    starpos_vBvvB = cs.transform_to_vxB_vxvxB(starpos_vBvvB).T
+    dd = (starpos_vBvvB[:, 0] ** 2 + starpos_vBvvB[:, 1] ** 2) ** 0.5
+    logger.info(
+        "star shape from: {} - {}".format(-dd.max(), dd.max()))
+    return starpos_vBvvB
+
+
+def select_channels(requested_channel_ids: list, det: DetectorBase, station_id: int):
+    station_channel_ids = det.get_channel_ids(station_id)
+
+    # select channels
+    if requested_channel_ids is not None and station_id in requested_channel_ids.keys():
+        requested_set = set(requested_channel_ids[station_id])
+        if not requested_set.issubset(set(station_channel_ids)):
+            # keep as raise ValueError or send to logger.warning?
+            raise ValueError(
+                f"`requested_channel_ids` at station {station_id} is not a subset of available channel ids; {requested_set.difference(set(station_channel_ids))} not found.")
+        channel_ids = requested_channel_ids[station_id]
+    else:
+        channel_ids = station_channel_ids
+    return channel_ids
+
+
 def project_to_showerplane(station_positions: np.ndarray, cs: cstrafo, simshower):
     """
     transform `station_positions` (ground coordinates) to shower plane coordinates, and project to this plane (drop z-component)
 
     station_positions: np.ndarray (n, 3)
 
-    returns
+    Returns
     -------
 
     projected: np.ndarray (n, 2)
@@ -104,3 +117,16 @@ def position_contained_in_starshape(station_positions: np.ndarray, starhape_posi
     contained = np.linalg.norm(
         station_positions[:, :-1], axis=-1) <= star_radius
     return bool(np.sum(~contained))
+
+
+def main():
+    filename = "/home/tiepolo/Documents/VUB/MA2/nrr-dev/hdf5/SIM000013.hdf5"
+    corsika = h5py.File(filename, "r")
+    zenith, azimuth, B = coreas.get_angles(corsika)
+    cs = cstrafo(zenith, azimuth, magnetic_field_vector=B)
+
+    get_corsika_pos_showerplane(corsika, cs)
+
+
+if __name__ == '__main__':
+    main()
