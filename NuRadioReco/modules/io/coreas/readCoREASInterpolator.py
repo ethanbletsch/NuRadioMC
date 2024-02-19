@@ -1,7 +1,8 @@
 from NuRadioReco.modules.base.module import register_run
 from NuRadioReco.detector.detector_base import DetectorBase
 from NuRadioReco.framework.event import Event
-from NuRadioReco.framework.base_shower import BaseShower
+from NuRadioReco.framework.station import Station
+from NuRadioReco.framework.radio_shower import RadioShower
 from NuRadioReco.framework.parameters import showerParameters as shp
 from NuRadioReco.modules.io.coreas import coreas
 import numpy as np
@@ -29,7 +30,16 @@ class readCoREASInterpolator():
 
     @register_run()
     def run(self, det: DetectorBase, requested_channel_ids: Optional[dict] = None, core_shift: Optional[np.ndarray] = None):
-        for station_id in det.get_station_ids():
+        evt = Event(0, 0)
+        sim_shower = coreas.make_sim_shower(self.corsika)
+        sim_shower.set_parameter(shp.core, np.zeros(3))
+        evt.add_sim_shower(sim_shower)
+        station_ids = det.get_station_ids()
+        rd_shower = RadioShower(station_ids=station_ids)
+        evt.add_shower(rd_shower)
+
+        for station_id in station_ids.get_station_ids():
+            station = Station(station_id)
 
             channel_ids = select_channels(
                 requested_channel_ids, det, station_id)
@@ -42,12 +52,19 @@ class readCoREASInterpolator():
 
             zenith, azimuth, magnetic_field_vector = coreas.get_angles(
                 self.corsika)
+
             cs = cstrafo(zenith, azimuth,
                          magnetic_field_vector=magnetic_field_vector)
-            showerplane_channel_positions = project_to_showerplane(
+            channels_pos_showerplane = project_to_showerplane(
                 ground_channel_positions, cs)
 
-            # if not position_contained_in_starshape(showerplane_channel_positions, self.sim_event.get_)
+            starshape_pos_showerplane = get_corsika_pos_showerplane(
+                self.corsika, cs)  # x, y
+            if not position_contained_in_starshape(channels_pos_showerplane, starshape_pos_showerplane):
+                logger.warn(
+                    "Channel positions are not all contained in the starshape! Will extrapolate.")
+
+            # self.
 
     def end(self):
         self.corsika.close()
@@ -99,8 +116,7 @@ def project_to_showerplane(station_positions: np.ndarray, cs: cstrafo, simshower
 
     projected: np.ndarray (n, 2)
     """
-    station_positions_vxB_vxvxB = cs.transform_to_vxB_vxvxB(
-        station_positions, core=simshower[shp.core])
+    station_positions_vxB_vxvxB = cs.transform_to_vxB_vxvxB(station_positions)
     projected = station_positions_vxB_vxvxB[:, :-1]
     return projected
 
