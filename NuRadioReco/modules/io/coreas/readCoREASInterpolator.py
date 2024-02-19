@@ -64,7 +64,10 @@ class readCoREASInterpolator():
                 logger.warn(
                     "Channel positions are not all contained in the starshape! Will extrapolate.")
 
-            # self.
+            efields = self.signal_interpolator(
+                *channels_pos_showerplane[:, :-1])
+            efields = np.array([efields[:, i] for i in range(3)])
+            sim_station = coreas.make_sim_station(station_id, self.corsika, )
 
     def end(self):
         self.corsika.close()
