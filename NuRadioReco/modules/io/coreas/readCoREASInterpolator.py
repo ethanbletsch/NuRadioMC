@@ -14,15 +14,14 @@ import h5py
 import logging
 
 
-
 class readCoREASInterpolator():
     def __init__(self) -> None:
         self.signal_interpolator = sigF.interp2d_signal()
         self.logger = logging.getLogger("NuRadioReco.readCoREASInterpolator")
 
-    def begin(self, filename, logger_level = logging.WARNING):
-        self.corsika = hdf5.File(filename)
-        logger.setLevel(logger_level)
+    def begin(self, filename, logger_level=logging.WARNING):
+        self.corsika = h5py.File(filename)
+        self.logger.setLevel(logger_level)
         pass
 
     @register_run()
@@ -35,44 +34,48 @@ class readCoREASInterpolator():
                 if not requested_set.issubset(set(station_channel_ids)):
                     # keep as raise ValueError or send to logger.warning?
                     raise ValueError(
-                        f"`requested_channel_ids` at station {station_id} is not a subset of available channel ids; {requested_set.difference(station_set)} not found.")
+                        f"`requested_channel_ids` at station {station_id} is not a subset of available channel ids; {requested_set.difference(set(station_channel_ids))} not found.")
                 channel_ids = requested_channel_ids[station_id]
             else:
                 channel_ids = station_channel_ids
 
             simpos = []
-            for i, observer in enumerate(corsika['CoREAS']['observers'].values()):
+            for i, observer in enumerate(self.corsika['CoREAS']['observers'].values()):
                 position = observer.attrs['position']
-                simpos.append(np.array([-position[1], position[0], 0]) * units.cm)
-                self.logger.debug("({:.0f}, {:.0f})".format(position[0], position[1]))
+                simpos.append(
+                    np.array([-position[1], position[0], 0]) * units.cm)
+                self.logger.debug("({:.0f}, {:.0f})".format(
+                    position[0], position[1]))
             simpos = np.array(simpos)
 
             simpos_vBvvB = cs.transform_from_magnetic_to_geographic(simpos.T)
             simpos_vBvvB = cs.transform_to_vxB_vxvxB(simpos_vBvvB).T
             dd = (simpos_vBvvB[:, 0] ** 2 + simpos_vBvvB[:, 1] ** 2) ** 0.5
             ddmax = dd.max()
-            self.logger.info("star shape from: {} - {}".format(-dd.max(), dd.max()))
+            self.logger.info(
+                "star shape from: {} - {}".format(-dd.max(), dd.max()))
 
             station_position = det.get_absolute_position(station_id)
-            ground_channel_positions = np.array([station_position + det.get_relative_position(station_id, id) for id in channel_ids])
+            ground_channel_positions = np.array(
+                [station_position + det.get_relative_position(station_id, id) for id in channel_ids])
             if core_shift is not None:
                 ground_channel_positions -= core_shift
 
-            zenith, azimuth, magnetic_field_vector = coreas.get_angles(self.corsika)
-            cs = cstrafo(zenith, azimuth, magnetic_field_vector=magnetic_field_vector)
-            showerplane_channel_positions = project_to_showerplane(ground_channel_positions, cs)
+            zenith, azimuth, magnetic_field_vector = coreas.get_angles(
+                self.corsika)
+            cs = cstrafo(zenith, azimuth,
+                         magnetic_field_vector=magnetic_field_vector)
+            showerplane_channel_positions = project_to_showerplane(
+                ground_channel_positions, cs)
 
             # if not position_contained_in_starshape(showerplane_channel_positions, self.sim_event.get_)
 
-
-            
-
-    def end():
-        self.file.close()
+    def end(self):
+        self.corsika.close()
         pass
 
 
-def project_to_showerplane(station_positions: np.ndarray, cs: cstrafo):
+def project_to_showerplane(station_positions: np.ndarray, cs: cstrafo, simshower):
     """
     transform `station_positions` (ground coordinates) to shower plane coordinates, and project to this plane (drop z-component)
 
@@ -84,7 +87,7 @@ def project_to_showerplane(station_positions: np.ndarray, cs: cstrafo):
     projected: np.ndarray (n, 2)
     """
     station_positions_vxB_vxvxB = cs.transform_to_vxB_vxvxB(
-        station_positions, core=shower[shp.core])
+        station_positions, core=simshower[shp.core])
     projected = station_positions_vxB_vxvxB[:, :-1]
     return projected
 
