@@ -23,6 +23,7 @@ class readCoREASInterpolator():
         self.signal_interpolator = sigF.interp2d_signal()
 
     def begin(self, filename, logger_level=logging.WARNING):
+        # TODO: communicate whether interpolation occurs in CGS or SI. I'd suggest CGS: this way we can resuse coreas.make_sim_station which converts cgs to si. This might be an error I found in Lily's code: she converts cgs to si before interpolation, interpolates at the requested positions, and then plugs this in coreas.make_sim_station which repeats the conversion.
         self.corsika = h5py.File(filename)
         logger.setLevel(logger_level)
         pass
@@ -38,7 +39,7 @@ class readCoREASInterpolator():
         evt.add_shower(rd_shower)
 
         for station_id in station_ids.get_station_ids():
-            station = station.Station(station_id)
+            stat = station.Station(station_id)
 
             channel_ids = select_channels(
                 requested_channel_ids, det, station_id)
@@ -67,29 +68,35 @@ class readCoREASInterpolator():
                 *channels_pos_showerplane[:, :-1])
             efields = np.array([efields[:, i] for i in range(3)])
 
+            efields_interp = self.signal_interpolator()
+            sim_stat = coreas.make_sim_station(
+                station_id, self.corsika, efields_interp, channel_ids)
+            stat.set_sim_station(sim_stat)
+            evt.set_station(stat)
+
     def end(self):
         self.corsika.close()
         pass
 
 
-def make_sim_station(station_id: int, corsika: h5py.File, channel_ids: list, Efields: np.ndarray, weight=None):
-    simstat = sim_station.SimStation(station_id)
-    zenith, azimuth, B = coreas.get_angles(corsika)
-    cs = cstrafo(zenith, azimuth, magnetic_field_vector=B)
-    simstat.set_parameter(stnp.zenith, zenith)
-    simstat.set_parameter(stnp.azimuth, azimuth)
-    simstat.set_parameter(
-        stnp.cr_energy, corsika["CoREAS"].attrs["ERANGE"][0] * units.GeV)
-    simstat.set_parameter(
-        stnp.cr_xmax, corsika["CoREAS"].attrs["DepthOfShowerMaximum"])
-    try:
-        simstat.set_parameter(
-            stnp.cr_energy_em, corsika["highlevel".attrs["Eem"]])
-    except KeyError:
-        logger.warning(
-            "No high-level quantities in HDF5 file, not setting EM energy.")
-    simstat.set_is_cosmic_ray()
-    return simstat
+# def make_sim_station(station_id: int, corsika: h5py.File, channel_ids: list, Efields: np.ndarray, weight=None):
+#     simstat = sim_station.SimStation(station_id)
+#     zenith, azimuth, B = coreas.get_angles(corsika)
+#     cs = cstrafo(zenith, azimuth, magnetic_field_vector=B)
+#     simstat.set_parameter(stnp.zenith, zenith)
+#     simstat.set_parameter(stnp.azimuth, azimuth)
+#     simstat.set_parameter(
+#         stnp.cr_energy, corsika["CoREAS"].attrs["ERANGE"][0] * units.GeV)
+#     simstat.set_parameter(
+#         stnp.cr_xmax, corsika["CoREAS"].attrs["DepthOfShowerMaximum"])
+#     try:
+#         simstat.set_parameter(
+#             stnp.cr_energy_em, corsika["highlevel".attrs["Eem"]])
+#     except KeyError:
+#         logger.warning(
+#             "No high-level quantities in HDF5 file, not setting EM energy.")
+#     simstat.set_is_cosmic_ray()
+#     return simstat
 
 
 def get_corsika_pos_showerplane(corsika: h5py.File, cs: cstrafo):
