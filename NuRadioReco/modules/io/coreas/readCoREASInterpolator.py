@@ -23,7 +23,7 @@ class readCoREASInterpolator():
         self.signal_interpolator = sigF.interp2d_signal()
 
     def begin(self, filename, logger_level=logging.WARNING):
-        # TODO: communicate whether interpolation occurs in CGS or SI. I'd suggest CGS: this way we can resuse coreas.make_sim_station which converts cgs to si. This might be an error I found in Lily's code: she converts cgs to si before interpolation, interpolates at the requested positions, and then plugs this in coreas.make_sim_station which repeats the conversion.
+        # TODO (correction from before, I was wrong!). Before interpolation, needs to be converted from CoREAS coordinates (and units why not) to NRR format. Use coreas.observer_to_nrr_data to do this. After for interpolation have to convert positions to vB_vvB and project out z, and turn efields to onsky (cstrafo.transform_magnetic_to_geographic and cstrafo.transform_from_ground_to_onsky)
         self.corsika = h5py.File(filename)
         logger.setLevel(logger_level)
         pass
@@ -38,7 +38,7 @@ class readCoREASInterpolator():
         rd_shower = radio_shower.RadioShower(station_ids=station_ids)
         evt.add_shower(rd_shower)
 
-        for station_id in station_ids.get_station_ids():
+        for station_id in station_ids:
             stat = station.Station(station_id)
 
             channel_ids = select_channels(
@@ -55,10 +55,10 @@ class readCoREASInterpolator():
 
             cs = cstrafo(zenith, azimuth,
                          magnetic_field_vector=magnetic_field_vector)
-            channels_pos_showerplane = project_to_showerplane(
-                ground_channel_positions, cs)
+            channels_pos_showerplane = cs.transform_to_vxB_vxvxB(
+                ground_channel_positions, sim_shower[shp.core])[:, :-1]
 
-            starshape_pos_showerplane = get_corsika_pos_showerplane(
+            starshape_pos_showerplane = get_showerplane_observer_positions(
                 self.corsika, cs)  # x, y
             if not position_contained_in_starshape(channels_pos_showerplane, starshape_pos_showerplane):
                 logger.warn(
@@ -70,7 +70,7 @@ class readCoREASInterpolator():
 
             efields_interp = self.signal_interpolator()
             sim_stat = coreas.make_sim_station(
-                station_id, self.corsika, efields_interp, channel_ids)
+                station_id, self.corsika, efields_interp, channel_ids, coreas_observer_format=False)
             stat.set_sim_station(sim_stat)
             evt.set_station(stat)
 
@@ -79,27 +79,8 @@ class readCoREASInterpolator():
         pass
 
 
-# def make_sim_station(station_id: int, corsika: h5py.File, channel_ids: list, Efields: np.ndarray, weight=None):
-#     simstat = sim_station.SimStation(station_id)
-#     zenith, azimuth, B = coreas.get_angles(corsika)
-#     cs = cstrafo(zenith, azimuth, magnetic_field_vector=B)
-#     simstat.set_parameter(stnp.zenith, zenith)
-#     simstat.set_parameter(stnp.azimuth, azimuth)
-#     simstat.set_parameter(
-#         stnp.cr_energy, corsika["CoREAS"].attrs["ERANGE"][0] * units.GeV)
-#     simstat.set_parameter(
-#         stnp.cr_xmax, corsika["CoREAS"].attrs["DepthOfShowerMaximum"])
-#     try:
-#         simstat.set_parameter(
-#             stnp.cr_energy_em, corsika["highlevel".attrs["Eem"]])
-#     except KeyError:
-#         logger.warning(
-#             "No high-level quantities in HDF5 file, not setting EM energy.")
-#     simstat.set_is_cosmic_ray()
-#     return simstat
 
-
-def get_corsika_pos_showerplane(corsika: h5py.File, cs: cstrafo):
+def get_showerplane_observer_positions(corsika: h5py.File, cs: cstrafo):
     starpos = []
     for observer in corsika['CoREAS']['observers'].values():
         position = observer.attrs['position']
@@ -113,7 +94,7 @@ def get_corsika_pos_showerplane(corsika: h5py.File, cs: cstrafo):
     starpos_vBvvB = cs.transform_to_vxB_vxvxB(starpos_vBvvB).T
     dd = (starpos_vBvvB[:, 0] ** 2 + starpos_vBvvB[:, 1] ** 2) ** 0.5
     logger.info(
-        "star shape from: {} - {}".format(-dd.max(), dd.max()))
+        "assumed star shape from: {} - {}".format(-dd.max(), dd.max()))
     return starpos_vBvvB
 
 
@@ -131,22 +112,6 @@ def select_channels(requested_channel_ids: list, det: DetectorBase, station_id: 
     else:
         channel_ids = station_channel_ids
     return channel_ids
-
-
-def project_to_showerplane(station_positions: np.ndarray, cs: cstrafo, simshower):
-    """
-    transform `station_positions` (ground coordinates) to shower plane coordinates, and project to this plane (drop z-component)
-
-    station_positions: np.ndarray (n, 3)
-
-    Returns
-    -------
-
-    projected: np.ndarray (n, 2)
-    """
-    station_positions_vxB_vxvxB = cs.transform_to_vxB_vxvxB(station_positions)
-    projected = station_positions_vxB_vxvxB[:, :-1]
-    return projected
 
 
 def position_contained_in_starshape(station_positions: np.ndarray, starhape_positions: np.ndarray):
@@ -169,7 +134,7 @@ def main():
     zenith, azimuth, B = coreas.get_angles(corsika)
     cs = cstrafo(zenith, azimuth, magnetic_field_vector=B)
 
-    get_corsika_pos_showerplane(corsika, cs)
+    get_showerplane_observer_positions(corsika, cs)
 
 
 if __name__ == '__main__':
