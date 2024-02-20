@@ -1,9 +1,8 @@
 from NuRadioReco.modules.base.module import register_run
 from NuRadioReco.detector.detector_base import DetectorBase
-from NuRadioReco.framework.event import Event
-from NuRadioReco.framework.station import Station
-from NuRadioReco.framework.radio_shower import RadioShower
+from NuRadioReco.framework import event, station, radio_shower, sim_station, electric_field
 from NuRadioReco.framework.parameters import showerParameters as shp
+from NuRadioReco.framework.parameters import stationParameters as stnp
 from NuRadioReco.modules.io.coreas import coreas
 import numpy as np
 # import NuRadioReco.framework.station
@@ -30,16 +29,16 @@ class readCoREASInterpolator():
 
     @register_run()
     def run(self, det: DetectorBase, requested_channel_ids: Optional[dict] = None, core_shift: Optional[np.ndarray] = None):
-        evt = Event(0, 0)
+        evt = event.Event(0, 0)
         sim_shower = coreas.make_sim_shower(self.corsika)
         sim_shower.set_parameter(shp.core, np.zeros(3))
         evt.add_sim_shower(sim_shower)
         station_ids = det.get_station_ids()
-        rd_shower = RadioShower(station_ids=station_ids)
+        rd_shower = radio_shower.RadioShower(station_ids=station_ids)
         evt.add_shower(rd_shower)
 
         for station_id in station_ids.get_station_ids():
-            station = Station(station_id)
+            station = station.Station(station_id)
 
             channel_ids = select_channels(
                 requested_channel_ids, det, station_id)
@@ -67,11 +66,30 @@ class readCoREASInterpolator():
             efields = self.signal_interpolator(
                 *channels_pos_showerplane[:, :-1])
             efields = np.array([efields[:, i] for i in range(3)])
-            sim_station = coreas.make_sim_station(station_id, self.corsika, )
 
     def end(self):
         self.corsika.close()
         pass
+
+
+def make_sim_station(station_id: int, corsika: h5py.File, channel_ids: list, Efields: np.ndarray, weight=None):
+    simstat = sim_station.SimStation(station_id)
+    zenith, azimuth, B = coreas.get_angles(corsika)
+    cs = cstrafo(zenith, azimuth, magnetic_field_vector=B)
+    simstat.set_parameter(stnp.zenith, zenith)
+    simstat.set_parameter(stnp.azimuth, azimuth)
+    simstat.set_parameter(
+        stnp.cr_energy, corsika["CoREAS"].attrs["ERANGE"][0] * units.GeV)
+    simstat.set_parameter(
+        stnp.cr_xmax, corsika["CoREAS"].attrs["DepthOfShowerMaximum"])
+    try:
+        simstat.set_parameter(
+            stnp.cr_energy_em, corsika["highlevel".attrs["Eem"]])
+    except KeyError:
+        logger.warning(
+            "No high-level quantities in HDF5 file, not setting EM energy.")
+    simstat.set_is_cosmic_ray()
+    return simstat
 
 
 def get_corsika_pos_showerplane(corsika: h5py.File, cs: cstrafo):
