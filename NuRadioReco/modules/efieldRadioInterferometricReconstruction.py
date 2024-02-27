@@ -6,12 +6,19 @@ from NuRadioReco.framework.parameters import showerParameters as shp
 from radiotools import helper as hp, coordinatesystems
 from radiotools.atmosphere import models, refractivity
 
+from NuRadioReco.framework.electric_field import ElectricField
+from NuRadioReco.framework.event import Event
+from NuRadioReco.framework.station import Station
+from NuRadioReco.framework.base_shower import BaseShower
+from NuRadioReco.detector.detector_base import DetectorBase
+
 from collections import defaultdict
 import numpy as np
 import sys
 import copy
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
+from typing import Optional
 
 import logging
 logger = logging.getLogger('efieldRadioInterferometricReconstruction')
@@ -19,7 +26,7 @@ logger = logging.getLogger('efieldRadioInterferometricReconstruction')
 """ 
 This module hosts to classes
     - efieldInterferometricDepthReco
-    - efieldInterferometricAxisReco (TODO: Not yet implemented)
+    - efieldInterferometricAxisReco
 
 The radio-interferometric reconstruction (RIT) was proposed in [1]. 
 The implementation here is based on work published in [2].
@@ -308,7 +315,7 @@ class efieldInterferometricDepthReco:
 
 
     @register_run()
-    def run(self, evt, det, use_MC_geometry=True, use_MC_pulses=True):
+    def run(self, evt: Event, det: DetectorBase, shower: BaseShower, use_MC_pulses: bool=True, MC_jitter: Optional[float] = None):
         """ 
         Run interferometric reconstruction of depth of coherent signal.
 
@@ -321,27 +328,21 @@ class efieldInterferometricDepthReco:
         det : Detector
             Detector description
 
-        use_MC_geometry : bool
-            if true, take geometry from sim_shower. Results will than also be stored in sim_shower
+        shower: BaseShower
+            shower to extract geometry from. Conventional: `evt.get_first_shower()` or `evt.get_first_sim_shower()`
 
         use_MC_pulses : bool
             if true, take electric field trace from sim_station
+
+        MC_jitter: Optional[float] (with unit of time, default: None)
+            Standard deviation of Gaussian noise added to timings, if set.
         """
 
-        # TODO: Mimic imperfect time syncronasation by adding a time jitter here? 
-
-        # TODO: Make it more flexible. Choose shower from which the geometry and atmospheric properties are taken.
-        # Also store xrit in this shower.
-        if use_MC_geometry:
-            shower = evt.get_first_sim_shower()
-        else:
-            shower = evt.get_first_shower()
-        
         self.update_atmospheric_model_and_refractivity_table(shower)
         core, shower_axis, cs = get_geometry_and_transformation(shower)
 
         traces_vxB, times, pos = get_station_data(
-            evt, det, cs, use_MC_pulses, n_sampling=256)
+            evt, det, cs, use_MC_pulses, MC_jitter, n_sampling=256)
 
         if self._debug:
             depths, depths_final, signals_tmp, signals_final, rit_parameters = \
@@ -745,7 +746,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         return direction_rec, core_rec
 
     @register_run()
-    def run(self, evt, det, use_MC_geometry=True, use_MC_pulses=True):
+    def run(self, evt, det, shower: BaseShower, use_MC_pulses: bool=True, MC_jitter: Optional[float] = None):
         """ 
         Run interferometric reconstruction of depth of coherent signal.
 
@@ -758,27 +759,22 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         det : Detector
             Detector description
 
-        use_MC_geometry : bool
-            if true, take geometry from sim_shower. Results will than also be stored in sim_shower
+        shower: BaseShower
+            shower to extract geometry from. Conventional: `evt.get_first_shower()` or `evt.get_first_sim_shower()`
 
-        use_MC_pulses : bool
+        use_MC_pulses : bool (default: True)
             if true, take electric field trace from sim_station
+
+        MC_jitter: Optional[float] (with unit of time, default: None)
+            Standard deviation of Gaussian noise added to timings, if set.
+
         """
-
-        # TODO: Mimic imperfect time syncronasation by adding a time jitter here?
-
-        # TODO: Make it more flexible. Choose shower from which the geometry and atmospheric properties are taken.
-        # Also store xrit in this shower.
-        if use_MC_geometry:
-            shower = evt.get_first_sim_shower()
-        else:
-            shower = evt.get_first_shower()
 
         self.update_atmospheric_model_and_refractivity_table(shower)
         core, shower_axis, cs = get_geometry_and_transformation(shower)
 
         traces_vxB, times, pos = get_station_data(
-            evt, det, cs, use_MC_pulses, n_sampling=256)
+            evt, det, cs, use_MC_pulses, MC_jitter, n_sampling=256)
 
         direction_rec, core_rec = self.reconstruct_shower_axis(
             traces_vxB, times, pos, shower_axis, core, is_mc=True, magnetic_field_vector=shower[shp.magnetic_field_vector])
@@ -820,7 +816,7 @@ def get_geometry_and_transformation(shower):
     return core, shower_axis, cs
 
 
-def get_station_data(evt, det, cs, use_MC_pulses, n_sampling=None):
+def get_station_data(evt: Event, det: DetectorBase, station_ids: list, cs: coordinatesystems.cstrafo, use_MC_pulses: bool, MC_jitter: Optional[float] = None, n_sampling: Optional[int]=None):
     """ 
     Returns station data in a proper format
     
@@ -831,10 +827,16 @@ def get_station_data(evt, det, cs, use_MC_pulses, n_sampling=None):
 
     det : Detector
 
+    station_ids: list
+        station_ids whose channels will be read out. For all stations, use `evt.get_station_ids()`
+
     cs : radiotools.coordinatesystems.cstrafo
 
     use_MC_pulses : bool
         if true take electric field trace from sim_station
+
+    MC_jitter: Optional[float] (with unit of time, default: None)
+        Standard deviation of Gaussian noise added to timings, if set.
 
     n_sampling : int
         if not None clip trace with n_sampling // 2 around np.argmax(np.abs(trace))
@@ -845,7 +847,7 @@ def get_station_data(evt, det, cs, use_MC_pulses, n_sampling=None):
     traces_vxB : np.array
         The electric field traces in the vxB polarisation (takes first electric field stored in a station) for all stations/observers.
 
-    times : mp.array  
+    times : np.array  
         The electric field traces time series for all stations/observers.
         
     pos : np.array
@@ -855,17 +857,21 @@ def get_station_data(evt, det, cs, use_MC_pulses, n_sampling=None):
     traces_vxB = []
     times = []
     pos = []
-
-    for station in evt.get_stations():
+    for station_id in station_ids:
+        station: Station = evt.get_station(station_id)
 
         if use_MC_pulses:
             station = station.get_sim_station()
-
+        
+        electric_field: ElectricField
         for electric_field in station.get_electric_fields():
             traces = cs.transform_to_vxB_vxvxB(
                 cs.transform_from_onsky_to_ground(electric_field.get_trace()))
             trace_vxB = traces[0]
             time = copy.copy(electric_field.get_times())
+            
+            if use_MC_pulses and bool(MC_jitter):
+                time += np.random.normal(scale=MC_jitter / units.ns, size=time.shape)
 
             if n_sampling is not None:
                 hw = n_sampling // 2
@@ -881,7 +887,7 @@ def get_station_data(evt, det, cs, use_MC_pulses, n_sampling=None):
 
             traces_vxB.append(trace_vxB)
             times.append(time)
-            break  # just take the first efield. TODO: Improve this
+            # break  # just take the first efield. TODO: Improve this
 
         pos.append(det.get_absolute_position(station.get_id()))
     
