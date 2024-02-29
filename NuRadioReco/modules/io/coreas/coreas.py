@@ -122,7 +122,7 @@ def calculate_simulation_weights(positions, zenith, azimuth, site='summit', debu
 
     return weights
 
-def observer_to_nrr_data(observer: np.ndarray):
+def observer_to_si_geomagnetic(observer):
     data = np.copy(observer)
     data[:, 1], data[:, 2] = -observer[:, 2], observer[:, 1]
     data[:, 0] *= units.second
@@ -162,7 +162,7 @@ def make_sim_station(station_id, corsika, observer, channel_ids, weight=None, co
         data = np.zeros((512, 4))
         data[:, 0] = np.arange(0, 512) * units.ns 
     elif coreas_observer_format:
-        data = observer_to_nrr_data(observer)
+        data = observer_to_si_geomagnetic(observer)
     else:
         data = np.copy(observer)
 
