@@ -23,12 +23,22 @@ def e_ce(traces, x, y):
 
 
 def geo_ce_to_e(geo, ce, x, y):
-    e_field = np.zeros((3, *geo.shape[::-1]))
+    e_field = np.zeros((3, *geo.shape[::-1]))  # 3 x SAMPLES x SLICES
 
-    e_field[0] = -1 * x / np.sqrt(x ** 2 + y ** 2) * ce - geo
-    e_field[1] = -1 * y / np.sqrt(x ** 2 + y ** 2) * ce
+    e_field[0] = (-1 * x / np.sqrt(x ** 2 + y ** 2) * ce - geo).T
+    e_field[1] = (-1 * y / np.sqrt(x ** 2 + y ** 2) * ce).T
 
     return e_field.T
+
+
+def filter_trace(trace, trace_sampling, f_min, f_max, sample_axis=0):
+    freq = np.fft.rfftfreq(trace.shape[sample_axis], trace_sampling) * units.Hz
+    freq_range = np.logical_and(freq > f_min, freq < f_max)
+
+    spectrum = np.fft.rfft(trace, axis=sample_axis)
+    spectrum = np.apply_along_axis(lambda ax: ax * freq_range.astype('int'), sample_axis, spectrum)
+
+    return np.fft.irfft(spectrum, axis=sample_axis)
 
 
 def amplitude_function(params, frequencies, d_noise=0.):
@@ -46,7 +56,7 @@ class groundElementSynthesis:
         self.__template_spectrum_geo = None
         self.__template_spectrum_ce = None
         self.__template_spectrum_ce_lin = None
-        self.__template_sampling = None
+        self.__template_frequencies = None
 
         # Fill in required variables
         self.position = pos
@@ -145,13 +155,13 @@ class groundElementSynthesis:
         Sets the template traces for GEO and CE components. Assumes the traces are already normalised
         with particle numbers!
         """
-        self.__template_sampling = sampling_d
-
         freq_geo = np.fft.rfftfreq(trace_geo.shape[-1], sampling_d / units.s) * units.Hz
         freq_ce = np.fft.rfftfreq(trace_ce.shape[-1], sampling_d / units.s) * units.Hz
 
         # Frequency arrays should be the same
         assert np.all(freq_geo == freq_ce), "Frequencies differ for GEO and CE"
+
+        self.__template_frequencies = freq_geo
 
         spectrum_geo = np.fft.rfft(trace_geo, norm='ortho', axis=-1)  # SLICES x FREQ
         spectrum_ce = np.fft.rfft(trace_ce, norm='ortho', axis=-1)
@@ -164,7 +174,7 @@ class groundElementSynthesis:
 
         # Normalise
         normalisation = self._calculate_amp_fit(shower_xmax, freq_geo)  # {GEO, CE, CE_LIN} x SLICES x FREQ
-        # TODO: round values which are too small to avoid numerical imprecisions
+        # TODO: round values which are too small to avoid numerical imprecision's
 
         self.__template_spectrum_geo = np.stack((abs_geo / normalisation[0], phase_geo))
         self.__template_spectrum_ce = np.stack((abs_ce / normalisation[1], phase_ce))
@@ -176,10 +186,7 @@ class groundElementSynthesis:
         if not self.has_template:
             raise RuntimeError(f"Template has not been set yet for antenna {self.name}")
 
-        trace_len = len(self.__template_spectrum_geo) // 2 * 2
-        freq = np.fft.rfftfreq(trace_len, self.__template_sampling)
-
-        normalisation = self._calculate_amp_fit(target_xmax, freq)  # {GEO, CE, CE_LIN} x SLICES x FREQ
+        normalisation = self._calculate_amp_fit(target_xmax, self.__template_frequencies)  # COMPONENT x SLICES x FREQ
 
         synth_geo = self.__template_spectrum_geo[0] * normalisation[0] * np.exp(1j * self.__template_spectrum_geo[1])
         synth_ce = self.__template_spectrum_ce[0] * normalisation[1] * np.exp(1j * self.__template_spectrum_ce[1])
@@ -253,7 +260,7 @@ class slicedShower:
             trace_slice = file['CoREAS']['observers'][f'{ant_name}x{g_slice}'][:] * c_vacuum * 1e2  # samples x 4
             trace_slice *= units.microvolt / units.m
 
-            trace_slice_ground = np.matrix(
+            trace_slice_ground = np.array(
                 [-trace_slice[:, 2], trace_slice[:, 1], trace_slice[:, 3]]
             )
             trace_slice_vvB = transformer.transform_to_vxB_vxvxB(trace_slice_ground).T
@@ -307,6 +314,11 @@ class templateSynthesis:
         self.__n_slices = None
         self.__g_slices = None  # the grammage of a single slice, usually 5 g/cm2
 
+        # Frequency variables
+        self.__freq_interval = (0.0, np.inf)
+        self.__freq_center = 0.0
+
+        # Geometry variables
         self.__zenith = None
         self.__azimuth = None
         self.__magnet = None
@@ -320,8 +332,36 @@ class templateSynthesis:
     def azimuth(self):
         return self.__azimuth / units.deg
 
+    @property
+    def antennas(self):
+        return self.__antennas
+
+    @property
+    def frequency(self):
+        return *self.__freq_interval, self.__freq_center
+
+    @frequency.setter
+    def frequency(self, new_freq: tuple | list):
+        if len(new_freq) != 3:
+            raise ValueError("Please provide a list of 3 elements: f_min, f_max and f_0")
+
+        self.__freq_interval = tuple(new_freq[:2])
+        self.__freq_center = new_freq[2]
+
+    def __freq_from_hdf5(self, file):
+        try:
+            self.__freq_interval = (
+                file['Metadata']['Fitting metadata']['min_frequency_MHz'] * units.MHz,
+                file['Metadata']['Fitting metadata']['max_frequency_MHz'] * units.MHz
+            )
+            self.__freq_center = file['Metadata']['Fitting metadata']['center_frequency_MHz'] * units.MHz
+        except KeyError:
+            logger.error("Frequencies are not present in parameter file. Please set them manually before proceeding")
+
     def begin(self, spectral_parameter_file, slicing_grammage=5):
         spectral_file = h5py.File(spectral_parameter_file)
+
+        self.__freq_from_hdf5(spectral_file)
 
         self.__g_slices = slicing_grammage
         self.__n_slices = spectral_file['Metadata']['EM profile'].shape[0]
@@ -360,19 +400,23 @@ class templateSynthesis:
 
         length_saved = False
         for antenna in self.__antennas:
-            geo, ce = origin_shower.get_trace(antenna.name)
+            geo, ce = origin_shower.get_trace(antenna.name)  # SLICES x SAMPLES
+
+            # Filter traces
+            geo_filtered = filter_trace(geo, shower_sampling_res, *self.__freq_interval, sample_axis=1)
+            ce_filtered = filter_trace(ce, shower_sampling_res, *self.__freq_interval, sample_axis=1)
 
             if not length_saved:
                 # Save trace length only once
-                self.__trace_length = len(geo)
+                self.__trace_length = geo.shape[1]
                 length_saved = True
 
             # Normalise the traces with the particle numbers in the slice
             # Sometimes the LONG table can contain an entry inside the ground, so index using nr of slices
-            geo /= shower_long_profile[:self.__n_slices, np.newaxis]
-            ce /= shower_long_profile[:self.__n_slices, np.newaxis]
+            geo_filtered /= shower_long_profile[:self.__n_slices, np.newaxis]
+            ce_filtered /= shower_long_profile[:self.__n_slices, np.newaxis]
 
-            antenna.set_template(origin_shower.xmax, geo, ce, sampling_d=shower_sampling_res)
+            antenna.set_template(origin_shower.xmax, geo_filtered, ce_filtered, sampling_d=shower_sampling_res)
 
     @register_run()
     def run(self, target_xmax, long_profile):
@@ -383,7 +427,7 @@ class templateSynthesis:
             magnetic_field_vector=self.__magnet
         )
 
-        traces_synth = np.zeros((len(self.__antennas), self.__trace_length, 2))
+        traces_synth = np.zeros((len(self.__antennas), 3, self.__trace_length, 2))  # ANT x POL x SAMPLES x CE(_LIN)
         for ind, antenna in enumerate(self.__antennas):
             synth = antenna.map_template(target_xmax)
 
@@ -397,8 +441,14 @@ class templateSynthesis:
             )
 
             # Sum all slices
-            traces_synth[ind, :, 0] = np.sum(geo_ce_to_e(geo, ce, *antenna_vvB[:2]), axis=0)
-            traces_synth[ind, :, 1] = np.sum(geo_ce_to_e(geo, ce_lin, *antenna_vvB[:2]), axis=0)
+            e_field = np.sum(geo_ce_to_e(geo, ce, *antenna_vvB[:2]), axis=0)  # SLICES x SAMPLES x 3, summed over slices
+            e_field_lin = np.sum(geo_ce_to_e(geo, ce_lin, *antenna_vvB[:2]), axis=0)
+
+            # Save traces on ground
+            traces_synth[ind, :, :, 0] = transformer.transform_from_vxB_vxvxB(e_field.T)
+            traces_synth[ind, :, :, 1] = transformer.transform_from_vxB_vxvxB(e_field_lin.T)
+
+        return traces_synth
 
     def end(self):
         pass
