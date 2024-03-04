@@ -364,11 +364,14 @@ class efieldInterferometricDepthReco:
                     traces_vxB, times, pos, shower_axis, core, return_profile=True)
 
             fig, ax = plt.subplots(1)
-            ax.plot(depths, signals_tmp, "o")
-            ax.plot(depths_final, signals_final, "o")
+            ax.scatter(depths, signals_tmp, color="blue", label="signals_tmp", s=2)
+            ax.scatter(depths_final, signals_final, color="red", label="signals_final", s=2)
             ax.plot(depths_final, normal(
-                depths_final, *rit_parameters))
+                depths_final, *rit_parameters), label="gauss fit", color="black", ls="--")
             ax.axvline(rit_parameters[1])
+            ax.set_xlabel("slant depth [g/cm2]")
+            ax.set_ylabel(self._signal_kind)
+            ax.legend()
             plt.show()
         else:
             rit_parameters = self.reconstruct_interferometric_depth(
