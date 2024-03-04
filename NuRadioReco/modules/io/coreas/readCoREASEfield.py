@@ -77,7 +77,7 @@ class readCoREASEfield():
         self.corsika = h5py.File(self._filename)
 
     @register_run()
-    def run(self, det: Optional[GenericDetector] = None) -> tuple[Event, GenericDetector]:
+    def run(self, det: Optional[GenericDetector] = None) -> Event:
         if det is None:
             det = GenericDetector(json_filename=None, source="dict", dictionary=gen_detector_dict(self.corsika))
         evt = Event(1, self._event_id)
@@ -93,8 +93,7 @@ class readCoREASEfield():
             obsnames = [key for key in self.corsika["CoREAS/observers"].keys()]
             for channel_id in det.get_channel_ids(station_id):
                 obsname = obsnames[channel_id]
-                pos = det.get_absolute_position(
-                    station_id) + det.get_relative_position(station_id, channel_id)
+                pos = det.get_relative_position(station_id, channel_id)
                 electric_field = ElectricField([channel_id], position=pos)
                 data = coreas.observer_to_si_geomagnetic(
                     self.corsika[f"CoREAS/observers/{obsname}"])
@@ -120,8 +119,8 @@ class readCoREASEfield():
 
             evt.set_station(station)
         sim_shower = coreas.make_sim_shower(self.corsika)
-        sim_shower.set_parameter(shp.core, np.zeros(3, dtype=float))
-        evt.add_sim_shower(coreas.make_sim_shower(self.corsika))
+        sim_shower.set_parameter(shp.core, np.array([0.,0.,sim_shower[shp.observation_level]]))
+        evt.add_sim_shower(sim_shower)
         return evt
 
     def end(self):
