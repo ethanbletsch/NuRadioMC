@@ -30,7 +30,6 @@ class readCoREASInterpolator():
         
         self.lowfreq = lowfreq
         self.highfreq = highfreq
-        self.sampling_period = None
         if interpolator_kwargs:
             self.interpolator_kwargs == interpolator_kwargs
         else:
@@ -93,8 +92,6 @@ class readCoREASInterpolator():
         station_ids = det.get_station_ids()
         rd_shower = radio_shower.RadioShower(station_ids=station_ids)
         evt.add_shower(rd_shower)
-        det.get_channel_group_id()
-        det.get_channe
 
         for station_id in station_ids:
             stat = station.Station(station_id)
@@ -103,8 +100,12 @@ class readCoREASInterpolator():
                 requested_channel_ids, det, station_id)
 
             station_position = det.get_absolute_position(station_id)
-            ground_channel_positions = np.array(
-                [station_position + det.get_relative_position(station_id, id) for id in channel_ids])
+            # ground_channel_positions = np.array(
+            #     [station_position + det.get_relative_position(station_id, id) for id in channel_ids])
+
+            ground_channel_positions = defaultdict(list)
+            for group_id in channel_ids.keys():
+                ground_channel_positions[group_id] += [station_position + det.get_relative_position(station_id, id) id in channel_ids[group_id]]
             
             if core_shift is not None:
                 ground_channel_positions -= core_shift
@@ -134,8 +135,11 @@ class readCoREASInterpolator():
 
     def end(self):
         self.corsika.close()
-        pass
-
+        self.corsika = None
+    
+    def __del__(self):
+        if self.corsika:
+            self.corsika.close()
 
 def make_sim_station(station_id, corsika, efields: list, channel_ids: list[list], weight=None):
     """
