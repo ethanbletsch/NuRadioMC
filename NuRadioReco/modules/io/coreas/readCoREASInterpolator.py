@@ -61,12 +61,21 @@ class readCoREASInterpolator():
             sampling_period = self.sampling_period,
             **self.interpolator_kwargs)
 
+    def begin(self, filename):
+        self.corsika = h5py.File(filename)
+        self.coreas_shower = coreas.make_sim_shower(self.corsika)
+        self.coreas_shower.set_parameter(shp.core, [0.,0.,self.coreas_shower[shp.observation_level]])
+        self.cs = cstrafo(*coreas.get_angles(self.corsika))
+
+        self.starshape_showerplane = get_showerplane_observer_positions(self.corsika, self.cs)
+        starshape_onsky = self.cs.
+        traces = []
+
+
     @register_run()
     def run(self, det: DetectorBase, requested_channel_ids: Optional[dict] = None, core_shift: Optional[np.ndarray] = None):
         evt = event.Event(0, 0)
-        sim_shower = coreas.make_sim_shower(self.corsika)
-        sim_shower.set_parameter(shp.core, np.zeros(3))
-        evt.add_sim_shower(sim_shower)
+        evt.add_sim_shower(self.coreas_shower)
         station_ids = det.get_station_ids()
         rd_shower = radio_shower.RadioShower(station_ids=station_ids)
         evt.add_shower(rd_shower)
@@ -80,20 +89,14 @@ class readCoREASInterpolator():
             station_position = det.get_absolute_position(station_id)
             ground_channel_positions = np.array(
                 [station_position + det.get_relative_position(station_id, id) for id in channel_ids])
+            
             if core_shift is not None:
                 ground_channel_positions -= core_shift
 
-            zenith, azimuth, magnetic_field_vector = coreas.get_angles(
-                self.corsika)
+            channels_pos_showerplane = self.cs.transform_to_vxB_vxvxB(
+                ground_channel_positions, self.coreas_shower[shp.core])[:, :-1]
 
-            cs = cstrafo(zenith, azimuth,
-                         magnetic_field_vector=magnetic_field_vector)
-            channels_pos_showerplane = cs.transform_to_vxB_vxvxB(
-                ground_channel_positions, sim_shower[shp.core])[:, :-1]
-
-            starshape_pos_showerplane = get_showerplane_observer_positions(
-                self.corsika, cs)  # x, y
-            if not position_contained_in_starshape(channels_pos_showerplane, starshape_pos_showerplane):
+            if not position_contained_in_starshape(channels_pos_showerplane, self.starshape_showerplane):
                 logger.warn(
                     "Channel positions are not all contained in the starshape! Will extrapolate.")
 
