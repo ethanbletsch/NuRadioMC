@@ -19,14 +19,47 @@ logger = logging.getLogger("NuRadioReco.readCoREASInterpolator")
 
 
 class readCoREASInterpolator():
-    def __init__(self) -> None:
-        self.signal_interpolator = sigF.interp2d_signal()
-
-    def begin(self, filename, logger_level=logging.WARNING):
-        # TODO (correction from before, I was wrong!). Before interpolation, needs to be converted from CoREAS coordinates (and units why not) to NRR format. Use coreas.observer_to_nrr_data to do this. After for interpolation have to convert positions to vB_vvB and project out z, and turn efields to onsky (cstrafo.transform_magnetic_to_geographic and cstrafo.transform_from_ground_to_onsky)
-        self.corsika = h5py.File(filename)
+    def __init__(self, 
+    logger_level=logging.WARNING,
+    lowfreq=30.0,
+    highfreq=500.0,
+    sampling_period=0.1e-9,
+    interpolator_kwargs:dict = None,
+    ):
         logger.setLevel(logger_level)
-        pass
+        
+        self.lowfreq = lowfreq
+        self.highfreq = highfreq
+        self.sampling_period = sampling_period
+        if interpolator_kwargs:
+            self.interpolator_kwargs == interpolator_kwargs
+        else:
+            self.interpolator_kwargs == {}
+        
+        self.corsika = None
+        self.signal_interpolator = None
+
+    def begin(self, filename):
+        # TODO:
+        # After for interpolation we should convert positions to vB_vvB and project out z,
+        # and turn efields to onsky (cstrafo.transform_from_magnetic_to_geographic and cstrafo.transform_from_ground_to_onsky)
+        self.corsika = h5py.File(filename)
+
+        footprint_positions = np.array(demo_file.get('footprint_positions'))
+
+        (footprint_pos_x_coreas, footprint_pos_y_coreas) = (footprint_positions[:, 0], footprint_positions[:, 1])
+        footprint_antenna_data_coreas = np.array(demo_file.get('footprint_antennas'))
+
+        # convert to NRR coordinates and units
+        footprint_pos_x = - footprint_pos_y_coreas * coreas.conversion_fieldstrength_cgs_to_SI
+        footprint_pos_y = footprint_pos_x_coreas * coreas.conversion_fieldstrength_cgs_to_SI
+
+        self.signal_interpolator = sigF.interp2d_signal(
+            footprint_pos_x, footprint_pos_y, footprint_antenna_data,
+            lowfreq = self.lowfreq,
+            highfreq = self.highfreq,
+            sampling_period = self.sampling_period,
+            **self.interpolator_kwargs)
 
     @register_run()
     def run(self, det: DetectorBase, requested_channel_ids: Optional[dict] = None, core_shift: Optional[np.ndarray] = None):
