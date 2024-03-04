@@ -3,6 +3,7 @@ from NuRadioReco.detector.detector_base import DetectorBase
 from NuRadioReco.framework import event, station, radio_shower, sim_station, electric_field
 from NuRadioReco.framework.parameters import showerParameters as shp
 from NuRadioReco.framework.parameters import stationParameters as stnp
+from NuRadioReco.framework.parameters import electricFieldParameters as efp
 from NuRadioReco.modules.io.coreas import coreas
 import numpy as np
 # import NuRadioReco.framework.station
@@ -13,7 +14,7 @@ import cr_pulse_interpolator.interpolation_fourier as fluF  # fluence
 from typing import Optional
 import h5py
 import logging
-
+from collections import defaultdict
 
 logger = logging.getLogger("NuRadioReco.readCoREASInterpolator")
 
@@ -23,14 +24,13 @@ class readCoREASInterpolator():
     logger_level=logging.WARNING,
     lowfreq=30.0,
     highfreq=500.0,
-    sampling_period=0.1e-9,
     interpolator_kwargs:dict = None,
     ):
         logger.setLevel(logger_level)
         
         self.lowfreq = lowfreq
         self.highfreq = highfreq
-        self.sampling_period = sampling_period
+        self.sampling_period = None
         if interpolator_kwargs:
             self.interpolator_kwargs == interpolator_kwargs
         else:
@@ -68,8 +68,22 @@ class readCoREASInterpolator():
         self.cs = cstrafo(*coreas.get_angles(self.corsika))
 
         self.starshape_showerplane = get_showerplane_observer_positions(self.corsika, self.cs)
-        starshape_onsky = self.cs.
         traces = []
+        for observer in self.corsika["CoREAS/observers"].values():
+            trace = self.cs.transform_from_magnetic_to_geographic(coreas.observer_to_si_geomagnetic(observer)[:,1:].T)
+            trace = self.cs.transform_to_vxB_vxvxB(trace)
+            traces.append(trace)
+
+        #does sigF.interp2d_signal take 3d arrays?
+        traces = np.vstack(traces)
+        self.signal_interpolator = sigF.interp2d_signal(
+            *self.starshape_showerplane.T,
+            traces,
+            lowfreq = self.lowfreq,
+            highfreq = self.highfreq,
+            sampling_period = self.corsika["CoREAS"].attrs["TimeResolution"],
+            **self.interpolator_kwargs
+        )
 
 
     @register_run()
@@ -79,11 +93,13 @@ class readCoREASInterpolator():
         station_ids = det.get_station_ids()
         rd_shower = radio_shower.RadioShower(station_ids=station_ids)
         evt.add_shower(rd_shower)
+        det.get_channel_group_id()
+        det.get_channe
 
         for station_id in station_ids:
             stat = station.Station(station_id)
 
-            channel_ids = select_channels(
+            channel_ids = select_channels_per_station(
                 requested_channel_ids, det, station_id)
 
             station_position = det.get_absolute_position(station_id)
@@ -100,13 +116,19 @@ class readCoREASInterpolator():
                 logger.warn(
                     "Channel positions are not all contained in the starshape! Will extrapolate.")
 
+            # proper shapes? expect (channel, polarization, trace length)
+            efields = [self.signal_interpolator(*pos[:-1]) for pos in channels_pos_showerplane]
             efields = self.signal_interpolator(
-                *channels_pos_showerplane[:, :-1])
-            efields = np.array([efields[:, i] for i in range(3)])
+                *channels_pos_showerplane[:, :-1]) #showerplane
+            # efields = np.array([efields[:, i] for i in range(3)]) # what??
+            efields = self.cs.transform_from_vxB_vxvxB(efields)
 
-            efields_interp = self.signal_interpolator()
-            sim_stat = coreas.make_sim_station(
-                station_id, self.corsika, efields_interp, channel_ids, coreas_observer_format=False)
+
+            # channel_ids are those associated to efield!
+            # should get channels by group
+            # need different efields per station, in the sense of different positions, not reflection, direct efield like in ice
+            sim_stat = make_sim_station(
+                station_id, self.corsika, efields, channel_ids)
             stat.set_sim_station(sim_stat)
             evt.set_station(stat)
 
@@ -115,10 +137,70 @@ class readCoREASInterpolator():
         pass
 
 
+def make_sim_station(station_id, corsika, efields: list, channel_ids: list[list], weight=None):
+    """
+    creates an NuRadioReco sim station from the (interpolated) observer object of the coreas hdf5 file
+
+    Parameters
+    ----------
+    station_id : station id
+        the id of the station to create
+    corsika : hdf5 file object
+        the open hdf5 file object of the corsika hdf5 file
+    observer : hdf5 observer object
+    channel_ids :
+    weight : weight of individual station
+        weight corresponds to area covered by station
+    coreas_observer_format: bool (defualt: True)
+        if `observer` argument is in the coreas cgs units and coordinates. If True, is passed to `coreas_observer_to_nrr_data` which switches x,y -> -y, x and converts to SI units. 
+
+    Returns
+    -------
+    sim_station: sim station
+        simulated station object
+    """
+
+    zenith, azimuth, magnetic_field_vector = coreas.get_angles(corsika)
+
+    cs = cstrafo(zenith, azimuth, magnetic_field_vector=magnetic_field_vector)
+
+    # prepend trace with zeros to not have the pulse directly at the start
+    n_samples_prepend = efield.shape[1]
+    for efield, assoc_channel_ids in zip(efields, channel_ids):
+        efield2 = np.zeros((3, n_samples_prepend + efield.shape[1]))
+        efield2[0] = np.append(np.zeros(n_samples_prepend), efield[0])
+        efield2[1] = np.append(np.zeros(n_samples_prepend), efield[1])
+        efield2[2] = np.append(np.zeros(n_samples_prepend), efield[2])
+
+        sampling_rate = 1. / (corsika['CoREAS'].attrs['TimeResolution'] * units.second)
+        sim_station_ = sim_station.SimStation(station_id)
+        electric_field_ = electric_field.ElectricField(assoc_channel_ids)
+        electric_field_.set_trace(efield2, sampling_rate)
+        electric_field_.set_trace_start_time(efield2[0, 0])
+        electric_field_.set_parameter(efp.ray_path_type, 'direct')
+        electric_field_.set_parameter(efp.zenith, zenith)
+        electric_field_.set_parameter(efp.azimuth, azimuth)
+        sim_station_.add_electric_field(electric_field_)
+    sim_station_.set_parameter(stnp.azimuth, azimuth)
+    sim_station_.set_parameter(stnp.zenith, zenith)
+    energy = corsika['inputs'].attrs["ERANGE"][0] * units.GeV
+    sim_station_.set_parameter(stnp.cr_energy, energy)
+    sim_station_.set_magnetic_field_vector(magnetic_field_vector)
+    sim_station_.set_parameter(stnp.cr_xmax, corsika['CoREAS'].attrs['DepthOfShowerMaximum'])
+    try:
+        sim_station_.set_parameter(stnp.cr_energy_em, corsika["highlevel"].attrs["Eem"])
+    except:
+        global warning_printed_coreas_py
+        if(not warning_printed_coreas_py):
+            logger.warning("No high-level quantities in HDF5 file, not setting EM energy, this warning will be only printed once")
+            warning_printed_coreas_py = True
+    sim_station_.set_is_cosmic_ray()
+    sim_station_.set_simulation_weight(weight)
+    return sim_station_
 
 def get_showerplane_observer_positions(corsika: h5py.File, cs: cstrafo):
     starpos = []
-    for observer in corsika['CoREAS']['observers'].values():
+    for observer in corsika['CoREAS/observers'].values():
         position = observer.attrs['position']
         starpos.append(
             np.array([-position[1], position[0], 0]) * units.cm)
@@ -134,19 +216,25 @@ def get_showerplane_observer_positions(corsika: h5py.File, cs: cstrafo):
     return starpos_vBvvB
 
 
-def select_channels(requested_channel_ids: list, det: DetectorBase, station_id: int):
+def select_channels_per_station(requested_channel_ids: list, det: DetectorBase, station_id: int):
+    channel_ids = defaultdict(list)
     station_channel_ids = det.get_channel_ids(station_id)
+    if requested_channel_ids is not None:
+        requested_channel_ids = station_channel_ids
 
     # select channels
-    if requested_channel_ids is not None and station_id in requested_channel_ids.keys():
+    if station_id in requested_channel_ids.keys():
         requested_set = set(requested_channel_ids[station_id])
         if not requested_set.issubset(set(station_channel_ids)):
             # keep as raise ValueError or send to logger.warning?
             raise ValueError(
                 f"`requested_channel_ids` at station {station_id} is not a subset of available channel ids; {requested_set.difference(set(station_channel_ids))} not found.")
         channel_ids = requested_channel_ids[station_id]
-    else:
-        channel_ids = station_channel_ids
+    
+    for channel_id in requested_channel_ids:
+        if channel_id in det.get_channel_ids(station_id):
+            channel_ids[det.get_channel_group_id(station_id, channel_id)].append(channel_id)
+
     return channel_ids
 
 
