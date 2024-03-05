@@ -73,6 +73,8 @@ class readCoREASInterpolator():
             signal = self.cs.transform_to_vxB_vxvxB(signal).T
             signals.append(signal)
 
+            logger.debug(f"parsed starshape detector at position {position_nr}")
+
         starpos = np.array(starpos)
         signals = np.array(signals)
         starpos_vBvvB = self.cs.transform_from_magnetic_to_geographic(starpos.T)
@@ -251,10 +253,24 @@ def position_contained_in_starshape(station_positions: np.ndarray, starhape_posi
 
 
 def main():
+    import matplotlib.pyplot as plt
+
     filename = "SIM000013.hdf5"
     interp = readCoREASInterpolator()
     interp.begin(filename)
 
+    print(f"there are {interp.starshape_showerplane.shape[0]} positions in the starshape")
+    print(f"the signals have shape {interp.signals.shape}")
+
+    amp = np.sqrt(np.max(np.sum(interp.signals**2, axis=-1), axis=1))
+
+    # show showerplane positions
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+    cm = plt.cm.get_cmap('RdYlBu_r')
+    sc = ax.scatter(*interp.starshape_showerplane.T, s=2, c=amp, vmin=amp.min(), vmax=amp.max(), cmap=cm)
+    plt.colorbar(sc)
+    plt.show()
 
 if __name__ == '__main__':
     main()
