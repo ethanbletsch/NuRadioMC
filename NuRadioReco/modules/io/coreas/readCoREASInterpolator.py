@@ -45,25 +45,44 @@ class readCoREASInterpolator():
             shp.core, [0., 0., self.coreas_shower[shp.observation_level]])
         self.cs = cstrafo(*coreas.get_angles(self.corsika))
 
-        self.starshape_showerplane = get_showerplane_observer_positions(
-            self.corsika, self.cs)
-        traces = []
-        for observer in self.corsika["CoREAS/observers"].values():
-            trace = self.cs.transform_from_magnetic_to_geographic(
-                coreas.observer_to_si_geomagnetic(observer)[:, 1:].T)
-            trace = self.cs.transform_to_vxB_vxvxB(trace)
-            traces.append(trace)
+        self._set_showerplane_positions_and_signals()
 
-        # does sigF.interp2d_signal take 3d arrays?
-        traces = np.vstack(traces)
         self.signal_interpolator = sigF.interp2d_signal(
-            *self.starshape_showerplane.T,
-            traces,
+            self.starshape_showerplane[...,0],
+            self.starshape_showerplane[...,1],
+            self.signals,
             lowfreq=self.lowfreq,
             highfreq=self.highfreq,
             sampling_period=self.corsika["CoREAS"].attrs["TimeResolution"],
             **self.interpolator_kwargs
         )
+
+    def _set_showerplane_positions_and_signals(self):
+        assert self.corsika != None and self.cs != None
+
+        starpos = []
+        signals = []
+
+        for observer in self.corsika['CoREAS/observers'].values():
+            position_coreas = observer.attrs['position']
+            position_nr = np.array([-position_coreas[1], position_coreas[0], 0]) * units.cm
+            starpos.append(position_nr)
+
+            signal = self.cs.transform_from_magnetic_to_geographic(
+                coreas.observer_to_si_geomagnetic(observer)[:, 1:].T)
+            signal = self.cs.transform_to_vxB_vxvxB(signal).T
+            signals.append(signal)
+
+        starpos = np.array(starpos)
+        signals = np.array(signals)
+        starpos_vBvvB = self.cs.transform_from_magnetic_to_geographic(starpos.T)
+        starpos_vBvvB = self.cs.transform_to_vxB_vxvxB(starpos_vBvvB).T
+
+        dd = (starpos_vBvvB[:, 0] ** 2 + starpos_vBvvB[:, 1] ** 2) ** 0.5
+        logger.info(f"assumed star shape from: {-dd.max()} - {dd.max()}")
+        
+        self.starshape_showerplane = starpos_vBvvB
+        self.signals = signals
 
     @register_run()
     def run(self, det: DetectorBase, requested_channel_ids: Optional[dict] = None, core_shift: np.ndarray = np.zeros(3)):
@@ -192,24 +211,6 @@ def make_sim_station(station_id, corsika, efields: dict, channel_ids: dict, posi
     sim_station_.set_is_cosmic_ray()
     sim_station_.set_simulation_weight(weight)
     return sim_station_
-
-
-def get_showerplane_observer_positions(corsika: h5py.File, cs: cstrafo):
-    starpos = []
-    for observer in corsika['CoREAS/observers'].values():
-        position = observer.attrs['position']
-        starpos.append(
-            np.array([-position[1], position[0], 0]) * units.cm)
-        logger.debug("({:.0f}, {:.0f})".format(
-            position[0], position[1]))
-    starpos = np.array(starpos)
-
-    starpos_vBvvB = cs.transform_from_magnetic_to_geographic(starpos.T)
-    starpos_vBvvB = cs.transform_to_vxB_vxvxB(starpos_vBvvB).T
-    dd = (starpos_vBvvB[:, 0] ** 2 + starpos_vBvvB[:, 1] ** 2) ** 0.5
-    logger.info(
-        "assumed star shape from: {} - {}".format(-dd.max(), dd.max()))
-    return starpos_vBvvB
 
 
 def select_channels_per_station(requested_channel_ids: list, det: DetectorBase, station_id: int):
