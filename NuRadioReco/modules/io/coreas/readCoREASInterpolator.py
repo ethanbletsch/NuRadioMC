@@ -21,9 +21,9 @@ logger = logging.getLogger("NuRadioReco.readCoREASInterpolator")
 
 class readCoREASInterpolator():
     def __init__(self,
-                 logger_level=logging.WARNING,
-                 lowfreq=30.0,
-                 highfreq=500.0,
+                 logger_level = logging.WARNING,
+                 lowfreq: float = 30.0,
+                 highfreq: float = 500.0,
                  interpolator_kwargs: dict = None,
                  ):
         logger.setLevel(logger_level)
@@ -31,9 +31,9 @@ class readCoREASInterpolator():
         self.lowfreq = lowfreq
         self.highfreq = highfreq
         if interpolator_kwargs:
-            self.interpolator_kwargs == interpolator_kwargs
+            self.interpolator_kwargs = interpolator_kwargs
         else:
-            self.interpolator_kwargs == {}
+            self.interpolator_kwargs = {}
 
         self.corsika = None
         self.signal_interpolator = None
@@ -250,12 +250,9 @@ def position_contained_in_starshape(station_positions: np.ndarray, starhape_posi
 
 
 def main():
-    filename = "/home/tiepolo/Documents/VUB/MA2/nrr-dev/hdf5/SIM000013.hdf5"
-    corsika = h5py.File(filename, "r")
-    zenith, azimuth, B = coreas.get_angles(corsika)
-    cs = cstrafo(zenith, azimuth, magnetic_field_vector=B)
-
-    get_showerplane_observer_positions(corsika, cs)
+    filename = "SIM000013.hdf5"
+    interp = readCoREASInterpolator()
+    interp.begin(filename)
 
 
 if __name__ == '__main__':
