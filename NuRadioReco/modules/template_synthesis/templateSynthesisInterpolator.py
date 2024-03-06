@@ -6,40 +6,38 @@ import h5py
 import numpy as np
 import radiotools.coordinatesystems
 
-from scipy.constants import c as c_vacuum
-
+from NuRadioReco.modules.template_synthesis.slicedShower import slicedShower
 from NuRadioReco.modules.base.module import register_run
 from NuRadioReco.utilities import units
 
 logger = logging.getLogger("NuRadioReco.templateSynthesis")
 
 
-def e_geo(traces, x, y):
-    return traces[:, 1] * x / y - traces[:, 0]
-
-
-def e_ce(traces, x, y):
-    return -traces[:, 1] * np.sqrt(x ** 2 + y ** 2) / y
-
-
 def geo_ce_to_e(geo, ce, x, y):
+    """
+    Combine the geomagnetic and charge-excess back to a 3D electric field, in the (vxB, vxvxB, v)
+    coordinate system. The component in v-direction is assumed to be 0.
+
+    Parameters
+    ----------
+    geo : ndarray
+    ce : ndarray
+    x : float
+        The x-component of the antenna position in the showerplane
+    y : float
+        The y-component of the antenna position in the showerplane
+
+    Returns
+    -------
+    e_field : ndarray
+        The electric field in (vxB, vxvxB, v) coordinates, shaped as (slices, samples, polarisations)
+    """
     e_field = np.zeros((3, *geo.shape[::-1]))  # 3 x SAMPLES x SLICES
 
     e_field[0] = (-1 * x / np.sqrt(x ** 2 + y ** 2) * ce - geo).T
     e_field[1] = (-1 * y / np.sqrt(x ** 2 + y ** 2) * ce).T
 
     return e_field.T
-
-
-def filter_trace(trace, trace_sampling, f_min, f_max, sample_axis=0):
-    # Assuming `trace_sampling` has the correct internal unit, freq is already in the internal unit system
-    freq = np.fft.rfftfreq(trace.shape[sample_axis], trace_sampling)
-    freq_range = np.logical_and(freq > f_min, freq < f_max)
-
-    spectrum = np.fft.rfft(trace, axis=sample_axis)
-    spectrum = np.apply_along_axis(lambda ax: ax * freq_range.astype('int'), sample_axis, spectrum)
-
-    return np.fft.irfft(spectrum, axis=sample_axis)
 
 
 def amplitude_function(params, frequencies, d_noise=0.):
@@ -200,114 +198,6 @@ class groundElementSynthesis:
         return np.fft.irfft(np.stack((synth_geo, synth_ce, synth_ce_lin)), norm='ortho', axis=-1)
 
 
-class slicedShower:
-    def __init__(self, file_path, slicing_grammage=5):
-        self.__slice_gram = slicing_grammage  # g/cm2
-        self.__file = file_path
-
-        self._trace_length = None
-        self._GH_parameters = None
-        self._magnetic_field = None
-
-        self.ant_names = None
-        self.nr_slices = None
-
-        self.__parse_hdf5()
-
-    def __parse_hdf5(self):
-        file = h5py.File(self.__file)
-
-        self.ant_names = set([key.split('x')[0] for key in file['CoREAS']['observers'].keys()])
-        self.nr_slices = len(file['CoREAS']['observers'].keys()) // len(self.ant_names)
-
-        self._trace_length = len(file['CoREAS']['observers'][f'{next(iter(self.ant_names))}x{self.__slice_gram}'])
-        self._GH_parameters = file['atmosphere'].attrs['Gaisser-Hillas-Fit']
-        self._magnetic_field = np.array([0, file['inputs'].attrs['MAGNET'][0], -1 * file['inputs'].attrs['MAGNET'][1]])
-
-        file.close()
-
-    @property
-    def xmax(self):
-        if self._GH_parameters is not None:
-            return self._GH_parameters[2]
-
-    @property
-    def magnet(self):
-        if self._magnetic_field is not None:
-            return self._magnetic_field
-
-    def filter_trace(self, trace, f_min, f_max):
-        trace_axis = -1  # based on self.get_trace()
-        if trace.shape[trace_axis] != self._trace_length:
-            logger.warning("Trace shape does not match recorded trace length along the last axis")
-            logger.status("Attempting to find the trace axis...")
-            for shape_i in range(len(trace.shape)):
-                if trace.shape[shape_i] == self._trace_length:
-                    logger.status(f"Found axis {shape_i} which matches trace length!")
-                    trace_axis = shape_i
-                    break
-        return filter_trace(trace, self.get_coreas_settings()['time_resolution'], f_min, f_max, sample_axis=trace_axis)
-
-    def get_trace(self, ant_name):
-        if ant_name not in self.ant_names:
-            raise ValueError(f"Antenna name {ant_name} is not present in shower")
-
-        file = h5py.File(self.__file)
-
-        zenith = file['inputs'].attrs['THETAP'][0] * units.deg
-        azimuth = file['inputs'].attrs['PHIP'][0] * units.deg - 90 * units.deg  # transform to radiotools coord
-
-        transformer = radiotools.coordinatesystems.cstrafo(
-            zenith / units.rad, azimuth / units.rad,
-            magnetic_field_vector=self._magnetic_field
-        )
-
-        antenna_ground = file['CoREAS']['observers'][f'{ant_name}x{self.__slice_gram}'].attrs['position'] * units.cm
-        antenna_vvB = transformer.transform_to_vxB_vxvxB(
-            np.array([-antenna_ground[1], antenna_ground[0], antenna_ground[2]])
-        )
-
-        traces_geo = np.zeros((self.nr_slices, self._trace_length))
-        traces_ce = np.zeros((self.nr_slices, self._trace_length))
-        for i_slice in range(self.nr_slices):
-            g_slice = (i_slice + 1) * self.__slice_gram
-
-            trace_slice = file['CoREAS']['observers'][f'{ant_name}x{g_slice}'][:] * c_vacuum * 1e2  # samples x 4
-            trace_slice *= units.microvolt / units.m
-
-            trace_slice_ground = np.array(
-                [-trace_slice[:, 2], trace_slice[:, 1], trace_slice[:, 3]]
-            )
-            trace_slice_vvB = transformer.transform_to_vxB_vxvxB(trace_slice_ground).T
-
-            # unit of pos does not matter, this is divided away
-            traces_geo[i_slice] = e_geo(trace_slice_vvB, *antenna_vvB[:2])
-            traces_ce[i_slice] = e_ce(trace_slice_vvB, *antenna_vvB[:2])
-
-        file.close()
-
-        return traces_geo, traces_ce
-
-    def get_long_profile(self):
-        file = h5py.File(self.__file)
-
-        long_table = file['atmosphere']['NumberOfParticles'][:]
-        long_profile = np.sum(long_table[:, 2:4], axis=1)
-
-        file.close()
-
-        return long_profile
-
-    def get_coreas_settings(self):
-        file = h5py.File(self.__file)
-
-        time_resolution = file['CoREAS'].attrs['TimeResolution'] * units.s
-
-        return {
-            'time_resolution': time_resolution
-        }
-
-
 class templateSynthesis:
     def __init__(self):
         #        low_freq=30.0 * units.MHz, high_freq=500.0 * units.MHz,
@@ -418,8 +308,8 @@ class templateSynthesis:
             geo, ce = origin_shower.get_trace(antenna.name)  # SLICES x SAMPLES
 
             # Filter traces
-            geo_filtered = filter_trace(geo, shower_sampling_res, *self.__freq_interval, sample_axis=1)
-            ce_filtered = filter_trace(ce, shower_sampling_res, *self.__freq_interval, sample_axis=1)
+            geo_filtered = origin_shower.filter_trace(geo, *self.__freq_interval)
+            ce_filtered = origin_shower.filter_trace(ce, *self.__freq_interval)
 
             if not length_saved:
                 # Save trace length only once
@@ -437,37 +327,42 @@ class templateSynthesis:
     def run(self, target_xmax, long_profile):
         assert len(long_profile) == self.__n_slices, "Long profile does not have correct number of slices"
 
-        # transformer = radiotools.coordinatesystems.cstrafo(
-        #     self.__zenith / units.rad, self.__azimuth / units.rad,
-        #     magnetic_field_vector=self.__magnet
-        # )
-
-        traces_synth = np.zeros((len(self.__antennas), 3, self.__trace_length))  # ANT x {GEO, CE, CE_LIN} x SAMPLES
+        traces_synth = np.zeros((len(self.__antennas), 3, self.__n_slices, self.__trace_length))
         for ind, antenna in enumerate(self.__antennas):
             synth = antenna.map_template(target_xmax)
 
-            geo = synth[0] * long_profile[:, np.newaxis]  # SLICES x SAMPLES
-            ce = synth[1] * long_profile[:, np.newaxis]
-            ce_lin = synth[2] * long_profile[:, np.newaxis]
+            traces_synth[ind, 0] = synth[0] * long_profile[:, np.newaxis]  # SLICES x SAMPLES
+            traces_synth[ind, 1] = synth[1] * long_profile[:, np.newaxis]
+            traces_synth[ind, 2] = synth[2] * long_profile[:, np.newaxis]
 
-            traces_synth[ind, 0] = np.sum(geo, axis=0)
-            traces_synth[ind, 1] = np.sum(ce, axis=0)
-            traces_synth[ind, 2] = np.sum(ce_lin, axis=0)
+        return traces_synth  # ANT x {GEO, CE, CE_LIN} x SLICES x SAMPLES
 
+    def transform_to_ground(self, traces):
+        assert traces.shape == (len(self.__antennas), 3, self.__n_slices, self.__trace_length), \
+            "Please provide the traces shaped as (ant, component, slices, samples)"
+
+        transformer = radiotools.coordinatesystems.cstrafo(
+            self.__zenith / units.rad, self.__azimuth / units.rad,
+            magnetic_field_vector=self.__magnet
+        )
+
+        traces_ground = np.zeros_like(traces)
+        for ind, antenna in enumerate(self.__antennas):
             # Antenna position in vvB
-            # antenna_vvB = transformer.transform_to_vxB_vxvxB(
-            #     np.array([-antenna.position[1], antenna.position[0], antenna.position[2]])
-            # )
-            #
-            # # Sum all slices
-            # e_field = np.sum(geo_ce_to_e(geo, ce, *antenna_vvB[:2]), axis=0)  # SLICES x SAMPLES x 3, slices summed
-            # e_field_lin = np.sum(geo_ce_to_e(geo, ce_lin, *antenna_vvB[:2]), axis=0)
-            #
-            # # Save traces on ground
-            # traces_synth[ind, :, :, 0] = transformer.transform_from_vxB_vxvxB(e_field.T)
-            # traces_synth[ind, :, :, 1] = transformer.transform_from_vxB_vxvxB(e_field_lin.T)
+            antenna_vvB = transformer.transform_to_vxB_vxvxB(
+                np.array([-antenna.position[1], antenna.position[0], antenna.position[2]])
+            )
 
-        return traces_synth
+            # Sum all slices
+            e_field = geo_ce_to_e(traces[ind, 0], traces[ind, 1], *antenna_vvB[:2])  # SLICES x SAMPLES x 3
+            e_field_lin = geo_ce_to_e(traces[ind, 0], traces[ind, 2], *antenna_vvB[:2])
+
+            # Save traces on ground
+            for ind_slice in range(self.__n_slices):
+                traces_ground[ind, :, ind_slice, :] = transformer.transform_from_vxB_vxvxB(e_field[ind_slice].T)
+                traces_ground[ind, :, ind_slice, :] = transformer.transform_from_vxB_vxvxB(e_field_lin[ind_slice].T)
+
+        return traces_ground
 
     def end(self):
         pass
