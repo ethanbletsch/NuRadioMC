@@ -98,6 +98,9 @@ class readCoREASInterpolator():
 
     @register_run()
     def run(self, det: DetectorBase, requested_channel_ids: Optional[list] = None, core_shift: np.ndarray = np.zeros(3)):
+        """
+
+        """
         evt = event.Event(0, 0)
         evt.add_sim_shower(self.coreas_shower)
         station_ids = det.get_station_ids()
@@ -108,7 +111,9 @@ class readCoREASInterpolator():
             stat = station.Station(station_id)
 
             channel_ids = select_channels_per_station(
-                requested_channel_ids, det, station_id)
+                detector=det,
+                station_id=station_id,
+                requested_channel_ids=requested_channel_ids)
 
             station_position = det.get_absolute_position(station_id)
             # ground_channel_positions = np.array(
@@ -121,14 +126,14 @@ class readCoREASInterpolator():
                     station_id, assoc_channel_ids[0]) - core_shift
                 channels_pos_showerplane_projected[group_id] = self.cs.transform_to_vxB_vxvxB(
                     channels_pos_ground[group_id],
-                    self.coreas_shower[shp.core])[:, :-1]
+                    self.coreas_shower[shp.core])
 
             if not position_contained_in_starshape(channels_pos_showerplane_projected.values(), self.starshape_showerplane):
                 logger.warn(
                     "Channel positions are not all contained in the starshape! Will extrapolate.")
 
             # proper shapes? expect (channel, polarization, trace length)
-            efields = defaultdict[list]
+            efields = defaultdict(list)
             for group_id, position in channels_pos_showerplane_projected.items():
                 efields[group_id] = self.cs.transform_from_vxB_vxvxB(self.signal_interpolator(
                     *position[:-1], lowfreq=self.lowfreq, highfreq=self.highfreq))
@@ -176,7 +181,6 @@ def make_sim_station(station_id, corsika, efields: dict, channel_ids: dict, posi
     """
 
     zenith, azimuth, magnetic_field_vector = coreas.get_angles(corsika)
-
     cs = cstrafo(zenith, azimuth, magnetic_field_vector=magnetic_field_vector)
 
     # prepend trace with zeros to not have the pulse directly at the start
@@ -225,34 +229,33 @@ def make_sim_station(station_id, corsika, efields: dict, channel_ids: dict, posi
     return sim_station_
 
 
-def select_channels_per_station(requested_channel_ids: list, det: DetectorBase, station_id: int):
+def select_channels_per_station(det: DetectorBase, station_id: int, requested_channel_ids: Optional[list]) -> defaultdict:
     """
+    Returns a defaultdict object containing the requeasted channel ids that are in the given station.
+    This dict contains the channel group ids as keys with lists of channel ids as values.
 
+    Parameters
+    ----------
+    det : DetectorBase
+        The detector object that contains the station
+    station_id : int
+        The station id to select channels from
+    requested_channel_ids : list
+        List of requested channel ids
     """
-    station_channel_ids = det.get_channel_ids(station_id)
     if requested_channel_ids is None:
-        requested_channel_ids = station_channel_ids
+        requested_channel_ids = det.get_channel_ids(station_id)
 
-    print(requested_channel_ids)
-
-    # select channels
-    if station_id in requested_channel_ids:
-        requested_set = set(requested_channel_ids[station_id])
-        if not requested_set.issubset(set(station_channel_ids)):
-            # keep as raise ValueError or send to logger.warning?
-            raise ValueError(
-                f"`station {station_id} is not available in the provided detector")
-        channel_ids = requested_channel_ids[station_id]
-
+    channel_ids = defaultdict(list)
     for channel_id in requested_channel_ids:
         if channel_id in det.get_channel_ids(station_id):
-            channel_ids[det.get_channel_group_id(
-                station_id, channel_id)].append(channel_id)
+            channel_group_id = det.get_channel_group_id(station_id, channel_id)
+            channel_ids[channel_group_id].append(channel_id)
 
     return channel_ids
 
 
-def position_contained_in_starshape(station_positions: np.ndarray, starhape_positions: np.ndarray):
+def position_contained_in_starshape(channel_positions: np.ndarray, starhape_positions: np.ndarray):
     """
     Verify if `station_positions` lie within the starshape defined by `starshape_positions`. Ensures interpolation. Projects out z-component.    
 
@@ -262,8 +265,8 @@ def position_contained_in_starshape(station_positions: np.ndarray, starhape_posi
     """
     star_radius = np.max(np.linalg.norm(starhape_positions[:, :-1], axis=-1))
     contained = np.linalg.norm(
-        station_positions[:, :-1], axis=-1) <= star_radius
-    return bool(np.sum(~contained))
+        channel_positions[:, :-1], axis=-1) <= star_radius
+    return np.any(~contained)
 
 
 def main():
