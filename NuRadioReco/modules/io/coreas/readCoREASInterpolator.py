@@ -21,7 +21,7 @@ logger = logging.getLogger("NuRadioReco.readCoREASInterpolator")
 
 class readCoREASInterpolator():
     def __init__(self,
-                 logger_level = logging.WARNING,
+                 logger_level=logging.WARNING,
                  lowfreq: float = 30.0,
                  highfreq: float = 500.0,
                  interpolator_kwargs: dict = None,
@@ -39,6 +39,9 @@ class readCoREASInterpolator():
         self.signal_interpolator = None
 
     def begin(self, filename):
+        """
+        Initializes the interpolator from a star-shape CoREAS simulation file
+        """
         self.corsika = h5py.File(filename)
         self.coreas_shower = coreas.make_sim_shower(self.corsika)
         self.coreas_shower.set_parameter(
@@ -48,8 +51,8 @@ class readCoREASInterpolator():
         self._set_showerplane_positions_and_signals()
 
         self.signal_interpolator = sigF.interp2d_signal(
-            self.starshape_showerplane[...,0],
-            self.starshape_showerplane[...,1],
+            self.starshape_showerplane[..., 0],
+            self.starshape_showerplane[..., 1],
             self.signals,
             lowfreq=self.lowfreq,
             highfreq=self.highfreq,
@@ -58,6 +61,10 @@ class readCoREASInterpolator():
         )
 
     def _set_showerplane_positions_and_signals(self):
+        """
+        Reads the positions and signals from the star-shape CoREAS simulation,
+        then converts them to the correct coordinate system and units.
+        """
         assert self.corsika != None and self.cs != None
 
         starpos = []
@@ -65,7 +72,8 @@ class readCoREASInterpolator():
 
         for observer in self.corsika['CoREAS/observers'].values():
             position_coreas = observer.attrs['position']
-            position_nr = np.array([-position_coreas[1], position_coreas[0], 0]) * units.cm
+            position_nr = np.array(
+                [-position_coreas[1], position_coreas[0], 0]) * units.cm
             starpos.append(position_nr)
 
             signal = self.cs.transform_from_magnetic_to_geographic(
@@ -73,21 +81,23 @@ class readCoREASInterpolator():
             signal = self.cs.transform_to_vxB_vxvxB(signal).T
             signals.append(signal)
 
-            logger.debug(f"parsed starshape detector at position {position_nr}")
+            logger.debug(
+                f"parsed starshape detector at position {position_nr}")
 
         starpos = np.array(starpos)
         signals = np.array(signals)
-        starpos_vBvvB = self.cs.transform_from_magnetic_to_geographic(starpos.T)
+        starpos_vBvvB = self.cs.transform_from_magnetic_to_geographic(
+            starpos.T)
         starpos_vBvvB = self.cs.transform_to_vxB_vxvxB(starpos_vBvvB).T
 
         dd = (starpos_vBvvB[:, 0] ** 2 + starpos_vBvvB[:, 1] ** 2) ** 0.5
         logger.info(f"assumed star shape from: {-dd.max()} - {dd.max()}")
-        
+
         self.starshape_showerplane = starpos_vBvvB
         self.signals = signals
 
     @register_run()
-    def run(self, det: DetectorBase, requested_channel_ids: Optional[dict] = None, core_shift: np.ndarray = np.zeros(3)):
+    def run(self, det: DetectorBase, requested_channel_ids: Optional[list] = None, core_shift: np.ndarray = np.zeros(3)):
         evt = event.Event(0, 0)
         evt.add_sim_shower(self.coreas_shower)
         station_ids = det.get_station_ids()
@@ -216,18 +226,22 @@ def make_sim_station(station_id, corsika, efields: dict, channel_ids: dict, posi
 
 
 def select_channels_per_station(requested_channel_ids: list, det: DetectorBase, station_id: int):
-    channel_ids = defaultdict(list)
+    """
+
+    """
     station_channel_ids = det.get_channel_ids(station_id)
-    if requested_channel_ids is not None:
+    if requested_channel_ids is None:
         requested_channel_ids = station_channel_ids
 
+    print(requested_channel_ids)
+
     # select channels
-    if station_id in requested_channel_ids.keys():
+    if station_id in requested_channel_ids:
         requested_set = set(requested_channel_ids[station_id])
         if not requested_set.issubset(set(station_channel_ids)):
             # keep as raise ValueError or send to logger.warning?
             raise ValueError(
-                f"`requested_channel_ids` at station {station_id} is not a subset of available channel ids; {requested_set.difference(set(station_channel_ids))} not found.")
+                f"`station {station_id} is not available in the provided detector")
         channel_ids = requested_channel_ids[station_id]
 
     for channel_id in requested_channel_ids:
@@ -254,23 +268,36 @@ def position_contained_in_starshape(station_positions: np.ndarray, starhape_posi
 
 def main():
     import matplotlib.pyplot as plt
+    from datetime import datetime
 
-    filename = "SIM000013.hdf5"
-    interp = readCoREASInterpolator()
-    interp.begin(filename)
+    detector = DetectorBase(
+        json_filename='LOFAR.json',
+        source='json',
+        antenna_by_depth=False
+    )
+    detector.update(datetime.now())
 
-    print(f"there are {interp.starshape_showerplane.shape[0]} positions in the starshape")
-    print(f"the signals have shape {interp.signals.shape}")
+    interpolator = readCoREASInterpolator()
+    interpolator.begin("SIM000013.hdf5")
 
-    amp = np.sqrt(np.max(np.sum(interp.signals**2, axis=-1), axis=1))
+    print(
+        f"there are {interpolator.starshape_showerplane.shape[0]} positions in the starshape")
+    print(f"the signals have shape {interpolator.signals.shape}")
+
+    output = interpolator.run(detector)
 
     # show showerplane positions
     fig = plt.figure()
     ax = fig.add_subplot(projection='3d')
-    cm = plt.cm.get_cmap('RdYlBu_r')
-    sc = ax.scatter(*interp.starshape_showerplane.T, s=2, c=amp, vmin=amp.min(), vmax=amp.max(), cmap=cm)
+
+    cm = plt.colormaps['RdYlBu_r']
+    amp = np.sqrt(np.max(np.sum(interpolator.signals**2, axis=-1), axis=1))
+    sc = ax.scatter(*interpolator.starshape_showerplane.T, s=2, c=amp,
+                    vmin=amp.min(), vmax=amp.max(), cmap=cm)
     plt.colorbar(sc)
+
     plt.show()
+
 
 if __name__ == '__main__':
     main()
