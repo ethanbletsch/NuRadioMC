@@ -32,7 +32,8 @@ def geo_ce_to_e(geo, ce, x, y):
 
 
 def filter_trace(trace, trace_sampling, f_min, f_max, sample_axis=0):
-    freq = np.fft.rfftfreq(trace.shape[sample_axis], trace_sampling) * units.Hz
+    # Assuming `trace_sampling` has the correct internal unit, freq is already in the internal unit system
+    freq = np.fft.rfftfreq(trace.shape[sample_axis], trace_sampling)
     freq_range = np.logical_and(freq > f_min, freq < f_max)
 
     spectrum = np.fft.rfft(trace, axis=sample_axis)
@@ -141,7 +142,10 @@ class groundElementSynthesis:
         b_fit = np.polynomial.polynomial.polyval(x_max, self.spectral_coefficients[1])
         c_fit = np.polynomial.polynomial.polyval(x_max, self.spectral_coefficients[2])
 
-        return self._amplitude_function(a_fit, b_fit, c_fit, freq)
+        amp_fit = self._amplitude_function(a_fit, b_fit, c_fit, freq)
+        amp_fit[np.where(np.abs(amp_fit) <= 1e-20)] = 1.  # remove values which are too small and cause inf
+
+        return amp_fit
 
     @staticmethod
     def _amplitude_function(a, b, c, frequencies, d_noise=0.):
@@ -174,7 +178,6 @@ class groundElementSynthesis:
 
         # Normalise
         normalisation = self._calculate_amp_fit(shower_xmax, freq_geo)  # {GEO, CE, CE_LIN} x SLICES x FREQ
-        # TODO: round values which are too small to avoid numerical imprecision's
 
         self.__template_spectrum_geo = np.stack((abs_geo / normalisation[0], phase_geo))
         self.__template_spectrum_ce = np.stack((abs_ce / normalisation[1], phase_ce))
@@ -232,6 +235,18 @@ class slicedShower:
     def magnet(self):
         if self._magnetic_field is not None:
             return self._magnetic_field
+
+    def filter_trace(self, trace, f_min, f_max):
+        trace_axis = -1  # based on self.get_trace()
+        if trace.shape[trace_axis] != self._trace_length:
+            logger.warning("Trace shape does not match recorded trace length along the last axis")
+            logger.status("Attempting to find the trace axis...")
+            for shape_i in range(len(trace.shape)):
+                if trace.shape[shape_i] == self._trace_length:
+                    logger.status(f"Found axis {shape_i} which matches trace length!")
+                    trace_axis = shape_i
+                    break
+        return filter_trace(trace, self.get_coreas_settings()['time_resolution'], f_min, f_max, sample_axis=trace_axis)
 
     def get_trace(self, ant_name):
         if ant_name not in self.ant_names:
@@ -422,12 +437,12 @@ class templateSynthesis:
     def run(self, target_xmax, long_profile):
         assert len(long_profile) == self.__n_slices, "Long profile does not have correct number of slices"
 
-        transformer = radiotools.coordinatesystems.cstrafo(
-            self.__zenith / units.rad, self.__azimuth / units.rad,
-            magnetic_field_vector=self.__magnet
-        )
+        # transformer = radiotools.coordinatesystems.cstrafo(
+        #     self.__zenith / units.rad, self.__azimuth / units.rad,
+        #     magnetic_field_vector=self.__magnet
+        # )
 
-        traces_synth = np.zeros((len(self.__antennas), 3, self.__trace_length, 2))  # ANT x POL x SAMPLES x CE(_LIN)
+        traces_synth = np.zeros((len(self.__antennas), 3, self.__trace_length))  # ANT x {GEO, CE, CE_LIN} x SAMPLES
         for ind, antenna in enumerate(self.__antennas):
             synth = antenna.map_template(target_xmax)
 
@@ -435,18 +450,22 @@ class templateSynthesis:
             ce = synth[1] * long_profile[:, np.newaxis]
             ce_lin = synth[2] * long_profile[:, np.newaxis]
 
+            traces_synth[ind, 0] = np.sum(geo, axis=0)
+            traces_synth[ind, 1] = np.sum(ce, axis=0)
+            traces_synth[ind, 2] = np.sum(ce_lin, axis=0)
+
             # Antenna position in vvB
-            antenna_vvB = transformer.transform_to_vxB_vxvxB(
-                np.array([-antenna.position[1], antenna.position[0], antenna.position[2]])
-            )
-
-            # Sum all slices
-            e_field = np.sum(geo_ce_to_e(geo, ce, *antenna_vvB[:2]), axis=0)  # SLICES x SAMPLES x 3, summed over slices
-            e_field_lin = np.sum(geo_ce_to_e(geo, ce_lin, *antenna_vvB[:2]), axis=0)
-
-            # Save traces on ground
-            traces_synth[ind, :, :, 0] = transformer.transform_from_vxB_vxvxB(e_field.T)
-            traces_synth[ind, :, :, 1] = transformer.transform_from_vxB_vxvxB(e_field_lin.T)
+            # antenna_vvB = transformer.transform_to_vxB_vxvxB(
+            #     np.array([-antenna.position[1], antenna.position[0], antenna.position[2]])
+            # )
+            #
+            # # Sum all slices
+            # e_field = np.sum(geo_ce_to_e(geo, ce, *antenna_vvB[:2]), axis=0)  # SLICES x SAMPLES x 3, slices summed
+            # e_field_lin = np.sum(geo_ce_to_e(geo, ce_lin, *antenna_vvB[:2]), axis=0)
+            #
+            # # Save traces on ground
+            # traces_synth[ind, :, :, 0] = transformer.transform_from_vxB_vxvxB(e_field.T)
+            # traces_synth[ind, :, :, 1] = transformer.transform_from_vxB_vxvxB(e_field_lin.T)
 
         return traces_synth
 
