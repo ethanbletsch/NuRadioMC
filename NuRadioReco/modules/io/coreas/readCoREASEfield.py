@@ -15,6 +15,7 @@ import numpy as np
 from NuRadioReco.utilities import units
 import logging
 import h5py
+from tqdm import tqdm
 
 logger = logging.getLogger("NuRadioReco.readCoREASEfield")
 
@@ -77,9 +78,9 @@ class readCoREASEfield():
         self.corsika = h5py.File(self._filename)
 
     @register_run()
-    def run(self, det: Optional[GenericDetector] = None) -> Event:
+    def run(self, det: Optional[GenericDetector] = None, sliceid: str = "") -> Event:
         if det is None:
-            det = GenericDetector(json_filename=None, source="dict", dictionary=gen_detector_dict(self.corsika))
+            det = GenericDetector(json_filename=None, source="dict", dictionary=gen_detector_dict(self.corsika, sliceid))
         evt = Event(1, self._event_id)
         for station_id in det.get_station_ids():
             station = Station(station_id)
@@ -90,7 +91,7 @@ class readCoREASEfield():
             sampling_rate = 1. / \
                 (self.corsika['CoREAS'].attrs['TimeResolution']
                  * units.second)
-            obsnames = [key for key in self.corsika["CoREAS/observers"].keys()]
+            obsnames = [key for key in self.corsika["CoREAS/observers"].keys() if sliceid in key]
             for channel_id in det.get_channel_ids(station_id):
                 obsname = obsnames[channel_id]
                 pos = det.get_relative_position(station_id, channel_id)
@@ -112,8 +113,8 @@ class readCoREASEfield():
             energy = self.corsika['inputs'].attrs["ERANGE"][0] * units.GeV
             sim_station.set_parameter(stnp.cr_energy, energy)
             sim_station.set_magnetic_field_vector(magnetic_field_vector)
-            sim_station.set_parameter(
-                stnp.cr_xmax, self.corsika['CoREAS'].attrs['DepthOfShowerMaximum'])
+            # sim_station.set_parameter(
+            #     stnp.cr_xmax, self.corsika['CoREAS'].attrs['DepthOfShowerMaximum'])
             sim_station.set_is_cosmic_ray()
             station.set_sim_station(sim_station)
 
@@ -121,13 +122,14 @@ class readCoREASEfield():
         sim_shower = coreas.make_sim_shower(self.corsika)
         sim_shower.set_parameter(shp.core, np.array([0.,0.,sim_shower[shp.observation_level]]))
         evt.add_sim_shower(sim_shower)
+
         return evt
 
     def end(self):
         self.corsika.close()
 
 
-def gen_detector_dict(corsika: h5py.File):
+def gen_detector_dict(corsika: h5py.File, sliceid: str = ""):
     """Generate a dictionary describing a GenericDetector, from a corsika hdf5 file. Written to be used only when using electric fields are needed, since antenna description is arbitrary except for positions. All observers are described as channels within one station."""
 
     station = {"station_id": 1, "pos_altitude": 0,
@@ -136,15 +138,20 @@ def gen_detector_dict(corsika: h5py.File):
         if key not in station.keys():
             station[key] = None
     channels = {}
-    for i, observer_name in enumerate(corsika["CoREAS/observers"]):
+    i = 0
+    for observer_name in tqdm(corsika["CoREAS/observers"]):
+        if sliceid not in observer_name:
+            continue
         position = corsika[f"CoREAS/observers/{
             observer_name}"].attrs["position"]
-        position_keys = [f"ant_position_{dir}" for dir in ["x", "y", "z"]]
-        channels[f"{i}"] = {key: val for key,
-                            val in zip(position_keys, position)}
+        position_keys = [f"ant_position_{dir}" for dir in ["y", "x", "z"]]
+        position_multiplier = [1, -1, 1]
+        # x, y = -y, x
+        channels[f"{i}"] = {key: mult*val * units.cm for key,val, mult in zip(position_keys, position, position_multiplier)}
         channels[f"{i}"]["station_id"] = 1
         channels[f"{i}"]["channel_id"] = i
         channels[f"{i}"]["reference_channel"] = 0
+        i += 1
     
     channels["0"]["ant_orientation_phi"] = 225.
     channels["0"]["ant_orientation_theta"] = 90.
