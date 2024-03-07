@@ -25,7 +25,7 @@ from joblib import Parallel, delayed
 from os import cpu_count
 
 import logging
-logger = logging.getLogger('efieldRadioInterferometricReconstruction')
+logger = logging.getLogger('NuRadioReco.efieldRadioInterferometricReconstruction')
 
 """ 
 This module hosts to classes
@@ -144,6 +144,7 @@ class efieldInterferometricDepthReco:
                     dist = self._at.get_distance_xmax_geometric(
                         zenith, dod, observation_level=core[-1])
                 except ValueError:
+                    logger.info("ValueError in get_distance_xmax_geometric, setting signal to 0")
                     signals[idx] = 0
                     continue
             else:
@@ -299,15 +300,16 @@ class efieldInterferometricDepthReco:
 
         shower : BaseShower
         """
+        logger.warn("flat earth geometry assumed. default was curved. If issue has been fixed, consider moving back to curved")
         curved = False
 
         if self._at is None:
-            self._at = models.Atmosphere(shower[shp.atmospheric_model])
+            self._at = models.Atmosphere(shower[shp.atmospheric_model], curved=curved)
             self._tab = refractivity.RefractivityTable(
                 self._at.model, refractivity_at_sea_level=shower[shp.refractive_index_at_ground] - 1, curved=curved)
 
         elif self._at.model != shower[shp.atmospheric_model]:
-            self._at = models.Atmosphere(shower[shp.atmospheric_model])
+            self._at = models.Atmosphere(shower[shp.atmospheric_model],curved=curved)
             self._tab = refractivity.RefractivityTable(
                 self._at.model, refractivity_at_sea_level=shower[shp.refractive_index_at_ground] - 1, curved=curved)
         
@@ -350,7 +352,7 @@ class efieldInterferometricDepthReco:
         core, shower_axis, cs = get_geometry_and_transformation(shower)
 
         traces_vxB, times, pos = get_station_data(
-            evt, det, cs, use_MC_pulses, station_ids=station_ids, MC_jitter=MC_jitter, n_sampling=256)
+            evt, det, cs, use_MC_pulses, station_ids=station_ids, mc_jitter=MC_jitter, n_sampling=256)
         
         def normal(x, A, x0, sigma):
             """ Gauss curve """
@@ -765,7 +767,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                     break
 
                 new_depth = depths[0] - (depths[1] - depths[0])
-                print("extend to", new_depth)
+                logger.info("extend to", new_depth)
                 found_point, weight = sample_lateral_cross_section_placeholder(
                     new_depth)
 
@@ -778,7 +780,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                     break
 
                 new_depth = depths[-1] + (depths[1] - depths[0])
-                print("extend to", new_depth)
+                logger.info("extend to", new_depth)
                 found_point, weight = sample_lateral_cross_section_placeholder(
                     new_depth)
 
@@ -836,7 +838,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         core, shower_axis, cs = get_geometry_and_transformation(shower)
 
         traces_vxB, times, pos = get_station_data(
-            evt, det, cs, use_MC_pulses, station_ids=station_ids, MC_jitter=MC_jitter, n_sampling=256)
+            evt, det, cs, use_MC_pulses, station_ids=station_ids, mc_jitter=MC_jitter, n_sampling=256)
 
         direction_rec, core_rec = self.reconstruct_shower_axis(
             traces_vxB, times, pos, shower_axis, core, is_mc=True, magnetic_field_vector=shower[shp.magnetic_field_vector], depths = depths, initial_grid_spacing=initial_grid_spacing, cross_section_size=lateral_grid_size)
@@ -878,7 +880,7 @@ def get_geometry_and_transformation(shower):
     return core, shower_axis, cs
 
 
-def get_station_data(evt: Event, det: DetectorBase, cs: coordinatesystems.cstrafo, use_MC_pulses: bool, station_ids: Optional[list] = None, MC_jitter: Optional[float] = None, n_sampling: Optional[int]=None):
+def get_station_data(evt: Event, det: DetectorBase, cs: coordinatesystems.cstrafo, use_MC_pulses: bool, station_ids: Optional[list] = None, mc_jitter: Optional[float] = None, n_sampling: Optional[int]=None):
     """ 
     Returns station data in a proper format
     
@@ -935,8 +937,8 @@ def get_station_data(evt: Event, det: DetectorBase, cs: coordinatesystems.cstraf
             trace_vxB = traces[0]
             time = copy.copy(electric_field.get_times())
             
-            if use_MC_pulses and bool(MC_jitter):
-                time += np.random.normal(scale=MC_jitter / units.ns, size=time.shape)
+            if use_MC_pulses and bool(mc_jitter):
+                time += np.random.normal(scale=mc_jitter / units.ns, size=time.shape)
 
             if n_sampling is not None:
                 hw = n_sampling // 2
