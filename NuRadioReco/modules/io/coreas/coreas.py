@@ -12,7 +12,7 @@ from NuRadioReco.framework.parameters import stationParameters as stnp
 from NuRadioReco.framework.parameters import electricFieldParameters as efp
 from NuRadioReco.framework.parameters import showerParameters as shp
 import logging
-logger = logging.getLogger('coreas')
+logger = logging.getLogger('NuRadioReco.coreas')
 
 warning_printed_coreas_py = False
 
@@ -241,7 +241,6 @@ def make_sim_shower(corsika, observer=None, detector=None, station_id=None):
         core_position[2] = 0
         sim_shower.set_parameter(shp.core, core_position)
 
-    print(f"corsika in coreas {corsika['CoREAS'].attrs['DepthOfShowerMaximum']}")
     sim_shower.set_parameter(shp.shower_maximum, corsika['CoREAS'].attrs['DepthOfShowerMaximum'] * units.g / units.cm2)
     sim_shower.set_parameter(shp.refractive_index_at_ground, corsika['CoREAS'].attrs["GroundLevelRefractiveIndex"])
     sim_shower.set_parameter(shp.magnetic_field_rotation,
