@@ -271,58 +271,8 @@ def position_contained_in_starshape(channel_positions: np.ndarray, starhape_posi
 
     starshape_positions: np.ndarray (m, 3)
     """
-    # scatter_stations(channel_positions, starhape_positions)
     star_radius = np.max(np.linalg.norm(starhape_positions[:, :-1], axis=-1))
     contained = np.linalg.norm(
         channel_positions[:, :-1], axis=-1) <= star_radius
     return contained
 
-def scatter_stations(true, star):
-    import matplotlib.pyplot as plt
-    fig = plt.figure()
-    ax = fig.add_subplot()
-    ax.scatter(*(true[:,:-1].T), color="k",s=2, label="true")
-    ax.scatter(*(star[:,:-1].T), marker="*", s=2,color="r", label="star")
-    ax.legend()
-    ax.set_aspect("equal")
-    plt.show()
-    plt.close()
-
-
-def main():
-    import matplotlib.pyplot as plt
-    from datetime import datetime
-
-    detector = DetectorBase(
-        json_filename='LOFAR.json',
-        source='json',
-        antenna_by_depth=False
-    )
-    detector.update(datetime.now())
-
-    interpolator = readCoREASInterpolator()
-    interpolator.begin("SIM000013.hdf5")
-
-    logger.debug(
-        f"starshape position array shape: {interpolator.starshape_showerplane.shape} (antenna, polarization)")
-    logger.debug(f"interpolator signal input shape {interpolator.signals.shape}")
-
-    output = interpolator.run(detector)
-
-    # show showerplane positions
-    fig = plt.figure()
-    ax = fig.add_subplot(projection='3d')
-
-    cm = plt.colormaps['RdYlBu_r']
-    amp = np.sqrt(np.max(np.sum(interpolator.signals**2, axis=-1), axis=1))
-    sc = ax.scatter(*interpolator.starshape_showerplane.T, s=2, c=amp,
-                    vmin=amp.min(), vmax=amp.max(), cmap=cm)
-    plt.colorbar(sc)
-
-    plt.show()
-
-    interpolator.end()
-
-
-if __name__ == '__main__':
-    main()
