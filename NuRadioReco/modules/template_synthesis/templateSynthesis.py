@@ -337,14 +337,19 @@ class templateSynthesis:
 
         return traces_synth  # ANT x {GEO, CE, CE_LIN} x SLICES x SAMPLES
 
-    def transform_to_ground(self, traces):
-        assert traces.shape == (len(self.__antennas), 3, self.__n_slices, self.__trace_length), \
-            "Please provide the traces shaped as (ant, component, slices, samples)"
-
+    def get_transformer(self):
         transformer = radiotools.coordinatesystems.cstrafo(
             self.__zenith / units.rad, self.__azimuth / units.rad,
             magnetic_field_vector=self.__magnet
         )
+
+        return transformer
+
+    def transform_to_ground(self, traces):
+        assert traces.shape == (len(self.__antennas), 3, self.__n_slices, self.__trace_length), \
+            "Please provide the traces shaped as (ant, component, slices, samples)"
+
+        transformer = self.get_transformer()
 
         traces_ground = np.zeros_like(traces)
         for ind, antenna in enumerate(self.__antennas):
@@ -362,7 +367,7 @@ class templateSynthesis:
                 traces_ground[ind, :, ind_slice, :] = transformer.transform_from_vxB_vxvxB(e_field[ind_slice].T)
                 traces_ground[ind, :, ind_slice, :] = transformer.transform_from_vxB_vxvxB(e_field_lin[ind_slice].T)
 
-        return traces_ground
+        return traces_ground  # ANT x COREAS_POL x SLICES x SAMPLES
 
     def end(self):
         pass

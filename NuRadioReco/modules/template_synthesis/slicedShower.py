@@ -24,10 +24,19 @@ def filter_trace(trace, trace_sampling, f_min, f_max, sample_axis=0):
     freq = np.fft.rfftfreq(trace.shape[sample_axis], trace_sampling)
     freq_range = np.logical_and(freq > f_min, freq < f_max)
 
-    spectrum = np.fft.rfft(trace, axis=sample_axis)
-    spectrum = np.apply_along_axis(lambda ax: ax * freq_range.astype('int'), sample_axis, spectrum)
+    # Find the median maximum sample number of the traces
+    max_index = np.median(np.argmax(trace, axis=sample_axis))
+    to_roll = int(trace.shape[sample_axis] / 2 - max_index)
 
-    return np.fft.irfft(spectrum, axis=sample_axis)
+    # Roll all traces such that max is in the middle
+    roll_pulse = np.roll(trace, to_roll)
+
+    # FFT, filter, IFFT
+    spectrum = np.fft.rfft(roll_pulse, axis=sample_axis)
+    spectrum = np.apply_along_axis(lambda ax: ax * freq_range.astype('int'), sample_axis, spectrum)
+    filtered = np.fft.irfft(spectrum, axis=sample_axis)
+
+    return np.roll(filtered, -to_roll)
 
 
 class slicedShower:
@@ -69,6 +78,10 @@ class slicedShower:
     def magnet(self):
         if self._magnetic_field is not None:
             return self._magnetic_field
+
+    @property
+    def slice_grammage(self):
+        return self.__slice_gram
 
     def filter_trace(self, trace, f_min, f_max):
         trace_axis = -1  # based on self.get_trace()
