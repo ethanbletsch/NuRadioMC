@@ -1,15 +1,16 @@
 from NuRadioReco.modules.base.module import register_run
 from NuRadioReco.detector.detector_base import DetectorBase
-from NuRadioReco.framework import event, station, radio_shower, sim_station, electric_field
+from NuRadioReco.framework import event, station, radio_shower, sim_station, electric_field, channel, sim_channel
 from NuRadioReco.framework.parameters import showerParameters as shp
 from NuRadioReco.framework.parameters import stationParameters as stnp
 from NuRadioReco.framework.parameters import electricFieldParameters as efp
+from NuRadioReco.framework.parameters import channelParameters as chp
 from NuRadioReco.modules.io.coreas import coreas
 import numpy as np
 from radiotools.coordinatesystems import cstrafo
 from NuRadioReco.utilities import units
-import cr_pulse_interpolator.signal_interpolation_fourier as sigF  # traces
-import cr_pulse_interpolator.interpolation_fourier as fluF  # fluence
+import cr_pulse_interpolator.signal_interpolation_fourier as traceinterp  # traces
+import cr_pulse_interpolator.interpolation_fourier as fluinterp  # fluence
 from typing import Optional
 import h5py
 import logging
@@ -25,6 +26,7 @@ class readCoREASInterpolator():
                  logger_level=logging.WARNING,
                  lowfreq: float = 30.0,
                  highfreq: float = 500.0,
+                 kind: str = "trace",
                  interpolator_kwargs: dict = None,
                  ):
         logger.setLevel(logger_level)
@@ -38,6 +40,8 @@ class readCoREASInterpolator():
 
         self.corsika = None
         self.signal_interpolator = None
+        assert kind in ["trace", "fluence"]
+        self.kind = kind
 
     def begin(self, filename):
         """
@@ -51,15 +55,23 @@ class readCoREASInterpolator():
 
         self._set_showerplane_positions_and_signals()
 
-        self.signal_interpolator = sigF.interp2d_signal(
-            self.starshape_showerplane[..., 0],
-            self.starshape_showerplane[..., 1],
-            self.signals,
-            lowfreq=self.lowfreq,
-            highfreq=self.highfreq,
-            sampling_period=self.corsika["CoREAS"].attrs["TimeResolution"],
-            **self.interpolator_kwargs
-        )
+        if self.kind == "trace":
+            self.signal_interpolator = traceinterp.interp2d_signal(
+                self.starshape_showerplane[..., 0],
+                self.starshape_showerplane[..., 1],
+                self.signals,
+                lowfreq=self.lowfreq,   # THIS OPTION IS UNUSED  IN traceinterp.interp2d_fourier.__init__
+                highfreq=self.highfreq,  # THIS OPTION IS UNUSED  IN traceinterp.interp2d_fourier.__init__
+                sampling_period=self.corsika["CoREAS"].attrs["TimeResolution"],
+                **self.interpolator_kwargs
+            )
+        elif self.kind == "fluence":
+            self.signal_interpolator = fluinterp.interp2d_fourier(
+                self.starshape_showerplane[..., 0],
+                self.starshape_showerplane[..., 1],
+                self.signals,
+                fill_value="extrapolate"  # THIS OPTION IS UNUSED  IN fluinterp.interp2d_fourier.__init__
+            )
 
     def _set_showerplane_positions_and_signals(self):
         """
@@ -80,6 +92,8 @@ class readCoREASInterpolator():
             signal = self.cs.transform_from_magnetic_to_geographic(
                 coreas.observer_to_si_geomagnetic(observer)[:, 1:].T)
             signal = self.cs.transform_to_vxB_vxvxB(signal).T
+            if self.kind == "fluence":
+                signal = np.sum(np.square(signal))
             signals.append(signal)
 
             logger.debug(
@@ -98,7 +112,11 @@ class readCoREASInterpolator():
         self.signals = signals
 
     @register_run()
-    def run(self, det: DetectorBase, station_ids: Optional[list] = None, requested_channel_ids: Optional[list] = None, core_shift: np.ndarray = np.zeros(3), multiprocess: bool = False) -> event.Event:
+    def run(self, det: DetectorBase,
+            station_ids: Optional[list] = None,
+            requested_channel_ids: Optional[list] = None,
+            core_shift: np.ndarray = np.zeros(3),
+            ) -> event.Event:
         evt = event.Event(0, 0)
         evt.add_sim_shower(self.coreas_shower)
 
@@ -106,52 +124,62 @@ class readCoREASInterpolator():
             station_ids = det.get_station_ids()
 
         for station_id in station_ids:
-            stat = station.Station(station_id)
 
-            channel_ids = select_channels_per_station(
+            chan_id_per_groupid = select_channels_per_station(
                 det=det,
                 station_id=station_id,
                 requested_channel_ids=requested_channel_ids)
 
-            if len(channel_ids.keys()) == 0:
-                logger.info(f"station {station_id} did not contain any requested channel_ids")
-                continue            
+            if len(chan_id_per_groupid.keys()) == 0:
+                logger.info(
+                    f"station {station_id} did not contain any requested channel_ids")
+                continue
 
-            station_position = det.get_absolute_position(station_id)
+            station_position_ground = det.get_absolute_position(station_id)
 
-            channels_pos_ground = defaultdict(list)
-            for group_id, assoc_channel_ids in channel_ids.items():
-                channels_pos_ground[group_id] = station_position + det.get_relative_position(
+            chan_positions_ground_per_groupid = {}
+            for group_id, assoc_channel_ids in chan_id_per_groupid.items():
+                chan_positions_ground_per_groupid[group_id] = station_position_ground + det.get_relative_position(
                     station_id, assoc_channel_ids[0]) - core_shift
-            channels_ground_flat = np.vstack(
-                [pos for pos in channels_pos_ground.values()])
+            chan_positions_ground = np.vstack(
+                [pos for pos in chan_positions_ground_per_groupid.values()])
 
-            channels_vxB = self.cs.transform_to_vxB_vxvxB(
-                channels_ground_flat, self.coreas_shower[shp.core])
-            channels_pos_showerplane = defaultdict(list)
-            for group_id, pos in zip(channel_ids.keys(), channels_vxB):
-                channels_pos_showerplane[group_id] = pos
+            chan_positions_vxB = self.cs.transform_to_vxB_vxvxB(
+                chan_positions_ground, self.coreas_shower[shp.core])
+            chan_positions_vxB_per_groupid = {}
+            for group_id, pos in zip(chan_id_per_groupid.keys(), chan_positions_vxB):
+                chan_positions_vxB_per_groupid[group_id] = pos
 
-            flattened_positions = np.vstack(
-                [pos for pos in channels_pos_showerplane.values()])
-            if np.any(~position_contained_in_starshape(flattened_positions, self.starshape_showerplane)):
+            # flattened_positions = np.vstack(
+            #     [pos for pos in chan_positions_vxB_per_groupid.values()])
+            if np.any(~position_contained_in_starshape(chan_positions_vxB, self.starshape_showerplane)):
                 logger.warn(
                     "Channel positions are not all contained in the starshape! Will extrapolate.")
 
-            # proper shapes? expect (channel, polarization, trace length)
-            efields = defaultdict(list)
-            for group_id, position in channels_pos_showerplane.items():
-                interpolated = self.signal_interpolator(
-                    *position[:-1], lowfreq=self.lowfreq, highfreq=self.highfreq)
-                efields[group_id] = self.cs.transform_from_vxB_vxvxB(
-                    interpolated.T)
+            stat = station.Station(station_id)
+            if self.kind == "trace":
+                efields = {}
+                for group_id, position in chan_positions_vxB_per_groupid.items():
+                    interpolated = self.signal_interpolator(
+                        *position[:-1], lowfreq=self.lowfreq, highfreq=self.highfreq)
+                    efields[group_id] = self.cs.transform_from_vxB_vxvxB(
+                        interpolated.T)
 
-            # channel_ids are those associated to efield!
-            # should get channels by group
-            # need different efields per station, in the sense of different positions, not reflection, direct efield like in ice
-            sim_stat = make_sim_station(
-                station_id, self.corsika, efields, channel_ids, channels_pos_ground)
-            stat.set_sim_station(sim_stat)
+                # channel_ids are those associated to efield!
+                # should get channels by group
+                # need different efields per station, in the sense of different positions, not reflection, direct efield like in ice
+                sim_stat = make_sim_station(
+                    station_id, self.corsika, chan_id_per_groupid, chan_positions_ground_per_groupid, efields=efields)
+                stat.set_sim_station(sim_stat)
+
+            elif self.kind == "fluence":
+                fluences = {}
+                for group_id, position in chan_positions_vxB_per_groupid.items():
+                    fluences[group_id] = self.signal_interpolator(*position[:-1])
+                sim_stat = make_sim_station(
+                    station_id, self.corsika, chan_id_per_groupid, chan_positions_ground_per_groupid, fluences=fluences)
+                stat.set_sim_station(sim_stat)
+            
             evt.set_station(stat)
         return evt
 
@@ -164,7 +192,13 @@ class readCoREASInterpolator():
             self.corsika.close()
 
 
-def make_sim_station(station_id, corsika, efields: dict, channel_ids: dict, positions: dict, weight=None):
+def make_sim_station(station_id,
+                    corsika: h5py.File,
+                    channel_ids_per_groupid: dict,
+                    positions: dict,
+                    efields: Optional[dict] = None,
+                    fluences: Optional[dict] = None,
+                    weight=None):
     """
     creates an NuRadioReco sim station from the (interpolated) observer object of the coreas hdf5 file
 
@@ -188,30 +222,36 @@ def make_sim_station(station_id, corsika, efields: dict, channel_ids: dict, posi
     sim_station: sim station
         simulated station object
     """
+    assert (efields is not None) or (fluences is not None)
 
     zenith, azimuth, magnetic_field_vector = coreas.get_angles(corsika)
     cs = cstrafo(zenith, azimuth, magnetic_field_vector=magnetic_field_vector)
 
     # prepend trace with zeros to not have the pulse directly at the start
     sim_station_ = sim_station.SimStation(station_id)
-    for group_id, assoc_channel_ids in channel_ids.items():
+    for group_id, assoc_channel_ids in channel_ids_per_groupid.items():
         # expect time, Ex, Ey, Ez (ground coordinates)
-        data = efields[group_id]
-        efield = cs.transform_from_ground_to_onsky(data)
-
-        # prepending zeros to not have pulse at start
-        n_samples_prepend = efield.shape[1]
-        efield2 = np.zeros((3, n_samples_prepend + efield.shape[1]))
-        efield2[0] = np.append(np.zeros(n_samples_prepend), efield[0])
-        efield2[1] = np.append(np.zeros(n_samples_prepend), efield[1])
-        efield2[2] = np.append(np.zeros(n_samples_prepend), efield[2])
-
-        sampling_rate = 1. / \
-            (corsika['CoREAS'].attrs['TimeResolution'] * units.second)
         electric_field_ = electric_field.ElectricField(
             assoc_channel_ids, position=positions[group_id])
-        electric_field_.set_trace(efield2, sampling_rate)
-        electric_field_.set_trace_start_time(data[0, 0])
+        
+        if fluences is not None:
+            electric_field_.set_parameter(efp.signal_energy_fluence, fluences[group_id])
+        
+        if efields is not None:
+            data = efields[group_id]
+            efield = cs.transform_from_ground_to_onsky(data)
+
+            # prepending zeros to not have pulse at start
+            n_samples_prepend = efield.shape[1]
+            efield2 = np.zeros((3, n_samples_prepend + efield.shape[1]))
+            efield2[0] = np.append(np.zeros(n_samples_prepend), efield[0])
+            efield2[1] = np.append(np.zeros(n_samples_prepend), efield[1])
+            efield2[2] = np.append(np.zeros(n_samples_prepend), efield[2])
+            sampling_rate = 1. / \
+                (corsika['CoREAS'].attrs['TimeResolution'] * units.second)
+            electric_field_.set_trace(efield2, sampling_rate)
+            electric_field_.set_trace_start_time(data[0, 0])
+            
         electric_field_.set_parameter(efp.ray_path_type, 'direct')
         electric_field_.set_parameter(efp.zenith, zenith)
         electric_field_.set_parameter(efp.azimuth, azimuth)
@@ -275,4 +315,3 @@ def position_contained_in_starshape(channel_positions: np.ndarray, starhape_posi
     contained = np.linalg.norm(
         channel_positions[:, :-1], axis=-1) <= star_radius
     return contained
-
