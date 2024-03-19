@@ -129,7 +129,6 @@ class readCoREASInterpolator:
             # debug: bool = False
             ) -> event.Event:
         evt = event.Event(0, 0)
-        evt.add_sim_shower(self.coreas_shower)
 
         if station_ids is None:
             station_ids = det.get_station_ids()
@@ -151,7 +150,7 @@ class readCoREASInterpolator:
             chan_positions_ground_per_groupid = {}
             for group_id, assoc_channel_ids in chan_id_per_groupid.items():
                 chan_positions_ground_per_groupid[group_id] = station_position_ground + det.get_relative_position(
-                    station_id, assoc_channel_ids[0]) - core_shift
+                    station_id, assoc_channel_ids[0]) + core_shift
             chan_positions_ground = np.vstack(
                 [pos for pos in chan_positions_ground_per_groupid.values()])
 
@@ -203,6 +202,10 @@ class readCoREASInterpolator:
                 stat.set_sim_station(sim_stat)
 
             evt.set_station(stat)
+
+        self.coreas_shower.set_parameter(
+            shp.core, np.array([0., 0., self.coreas_shower[shp.observation_level]]) - core_shift)
+        evt.add_sim_shower(self.coreas_shower)
         return evt
 
     def end(self):
