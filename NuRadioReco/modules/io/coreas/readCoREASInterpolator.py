@@ -60,9 +60,9 @@ class readCoREASInterpolator:
             self.signal_interpolator = traceinterp.interp2d_signal(
                 self.starshape_showerplane[..., 0],
                 self.starshape_showerplane[..., 1],
-                self.signals,
-                lowfreq=self.lowfreq,  # THIS OPTION IS UNUSED  IN traceinterp.interp2d_fourier.__init__
-                highfreq=self.highfreq,  # THIS OPTION IS UNUSED  IN traceinterp.interp2d_fourier.__init__
+                self.signals[..., 1:],
+                lowfreq=self.lowfreq / units.MHz,  # THIS OPTION IS UNUSED  IN traceinterp.interp2d_fourier.__init__
+                highfreq=self.highfreq / units.MHz,  # THIS OPTION IS UNUSED  IN traceinterp.interp2d_fourier.__init__
                 sampling_period=self.corsika["CoREAS"].attrs["TimeResolution"],
                 **self.interpolator_kwargs
             )
@@ -92,7 +92,7 @@ class readCoREASInterpolator:
 
             signal = self.cs.transform_from_magnetic_to_geographic(
                 coreas.observer_to_si_geomagnetic(observer)[:, 1:].T)
-            signal = self.cs.transform_to_vxB_vxvxB(signal)
+            signal = self.cs.transform_from_ground_to_onsky(signal)
             if self.kind == "fluence":
                 filter_response = bandpass_filter.get_filter_response(
                     np.fft.rfftfreq(signal.shape[1], d=self.corsika["CoREAS"].attrs["TimeResolution"]) * units.Hz,
@@ -102,7 +102,7 @@ class readCoREASInterpolator:
                 signal_fft = fft.time2freq(signal, sampling_rate)
                 signal_fft *= filter_response  # filter the signal
                 signal = fft.freq2time(signal_fft, sampling_rate, signal.shape[1])
-                signal = np.sum(np.square(signal[:1]))  # get the fluence of vxB and vxvB only
+                signal = np.sum(np.square(signal[1:]))  # get the fluence of vxB and vxvB only
             signals.append(signal.T)
 
             logger.debug(
@@ -126,6 +126,7 @@ class readCoREASInterpolator:
             station_ids: Optional[list] = None,
             requested_channel_ids: Optional[list] = None,
             core_shift: np.ndarray = np.zeros(3),
+            # debug: bool = False
             ) -> event.Event:
         evt = event.Event(0, 0)
         evt.add_sim_shower(self.coreas_shower)
@@ -172,9 +173,17 @@ class readCoREASInterpolator:
                 efields = {}
                 for group_id, position in chan_positions_vxB_per_groupid.items():
                     interpolated = self.signal_interpolator(
-                        *position[:-1], lowfreq=self.lowfreq, highfreq=self.highfreq)
-                    efields[group_id] = self.cs.transform_from_vxB_vxvxB(
-                        interpolated.T)
+                        *position[:-1], lowfreq=self.lowfreq / units.MHz, highfreq=self.highfreq / units.MHz).T
+                    interpolated = np.vstack([np.zeros_like(interpolated[0]), *interpolated])
+                    efields[group_id] = self.cs.transform_from_onsky_to_ground(
+                        interpolated)
+                    # if debug:
+                    #     import matplotlib.pyplot as plt
+                    #     fig = plt.figure()
+                    #     ax = fig.add_subplot()
+                    #     labels = ["x","y","z"]
+                    #     for t in interpolated
+
 
                 # channel_ids are those associated to efield!
                 # should get channels by group
@@ -282,7 +291,7 @@ def make_sim_station(station_id,
     try:
         sim_station_.set_parameter(
             stnp.cr_energy_em, corsika["highlevel"].attrs["Eem"])
-    except ValueError:
+    except KeyError:
         global warning_printed_coreas_py
         if not warning_printed_coreas_py:
             logger.warning(
