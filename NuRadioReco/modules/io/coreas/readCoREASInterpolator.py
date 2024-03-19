@@ -148,21 +148,24 @@ class readCoREASInterpolator:
             station_position_ground = det.get_absolute_position(station_id)
 
             chan_positions_ground_per_groupid = {}
+            chan_positions_ground_per_groupid_shifted = {}
             for group_id, assoc_channel_ids in chan_id_per_groupid.items():
                 chan_positions_ground_per_groupid[group_id] = station_position_ground + det.get_relative_position(
-                    station_id, assoc_channel_ids[0]) + core_shift
-            chan_positions_ground = np.vstack(
-                [pos for pos in chan_positions_ground_per_groupid.values()])
+                    station_id, assoc_channel_ids[0])
+                chan_positions_ground_per_groupid_shifted[group_id] = chan_positions_ground_per_groupid[group_id] + core_shift
 
-            chan_positions_vxB = self.cs.transform_to_vxB_vxvxB(
-                chan_positions_ground, self.coreas_shower[shp.core])
-            chan_positions_vxB_per_groupid = {}
-            for group_id, pos in zip(chan_id_per_groupid.keys(), chan_positions_vxB):
-                chan_positions_vxB_per_groupid[group_id] = pos
+            chan_positions_ground_shifted = np.vstack(
+                [pos for pos in chan_positions_ground_per_groupid_shifted.values()])
+
+            chan_positions_vxB_shifted = self.cs.transform_to_vxB_vxvxB(
+                chan_positions_ground_shifted, self.coreas_shower[shp.core])
+            chan_positions_vxB_per_groupid_shifted = {}
+            for group_id, pos in zip(chan_id_per_groupid.keys(), chan_positions_vxB_shifted):
+                chan_positions_vxB_per_groupid_shifted[group_id] = pos
 
             # flattened_positions = np.vstack(
             #     [pos for pos in chan_positions_vxB_per_groupid.values()])
-            if np.any(~position_contained_in_starshape(chan_positions_vxB, self.starshape_showerplane)):
+            if np.any(~position_contained_in_starshape(chan_positions_vxB_shifted, self.starshape_showerplane)):
                 logger.warning(
                     "Channel positions are not all contained in the starshape! Will extrapolate."
                 )
@@ -170,7 +173,7 @@ class readCoREASInterpolator:
             stat = station.Station(station_id)
             if self.kind == "trace":
                 efields = {}
-                for group_id, position in chan_positions_vxB_per_groupid.items():
+                for group_id, position in chan_positions_vxB_per_groupid_shifted.items():
                     interpolated = self.signal_interpolator(
                         *position[:-1], lowfreq=self.lowfreq / units.MHz, highfreq=self.highfreq / units.MHz).T
                     interpolated = np.vstack([np.zeros_like(interpolated[0]), *interpolated])
@@ -195,7 +198,7 @@ class readCoREASInterpolator:
 
             elif self.kind == "fluence":
                 fluences = {}
-                for group_id, position in chan_positions_vxB_per_groupid.items():
+                for group_id, position in chan_positions_vxB_per_groupid_shifted.items():
                     fluences[group_id] = self.signal_interpolator(*position[:-1])
                 sim_stat = make_sim_station(
                     station_id, self.corsika, chan_id_per_groupid, chan_positions_ground_per_groupid, fluences=fluences)
