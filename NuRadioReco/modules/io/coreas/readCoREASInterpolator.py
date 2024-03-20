@@ -271,18 +271,11 @@ def make_sim_station(station_id,
             electric_field_.set_parameter(efp.signal_energy_fluence, fluences[group_id])
 
         if efields is not None:
-            data = efields[group_id]
-            efield = cs.transform_from_ground_to_onsky(data)
+            efield = np.copy(efields[group_id])
 
-            # prepending zeros to not have pulse at start
-            n_samples_prepend = efield.shape[1]
-            efield2 = np.zeros((3, n_samples_prepend + efield.shape[1]))
-            efield2[0] = np.append(np.zeros(n_samples_prepend), efield[0])
-            efield2[1] = np.append(np.zeros(n_samples_prepend), efield[1])
-            efield2[2] = np.append(np.zeros(n_samples_prepend), efield[2])
             sampling_rate = 1. / (corsika['CoREAS'].attrs['TimeResolution'] * units.second)
-            electric_field_.set_trace(efield2, sampling_rate)
-            electric_field_.set_trace_start_time(data[0, 0])
+            electric_field_.set_trace(efield, sampling_rate)
+            electric_field_.set_trace_start_time(0.)
 
         electric_field_.set_parameter(efp.ray_path_type, 'direct')
         electric_field_.set_parameter(efp.zenith, zenith)
