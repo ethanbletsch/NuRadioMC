@@ -125,11 +125,12 @@ class readCoREASInterpolator:
     def run(self, det: DetectorBase,
             station_ids: Optional[list] = None,
             requested_channel_ids: Optional[list] = None,
-            core_shift: np.ndarray = np.zeros(3),
+            core_xy: np.ndarray = np.zeros(2, dtype=float),
             # debug: bool = False
             ) -> event.Event:
-        evt = event.Event(0, 0)
 
+        evt = event.Event(0, 0)
+        core_shift = np.append(core_xy, [0.])
         if station_ids is None:
             station_ids = det.get_station_ids()
 
@@ -152,7 +153,7 @@ class readCoREASInterpolator:
             for group_id, assoc_channel_ids in chan_id_per_groupid.items():
                 chan_positions_ground_per_groupid[group_id] = station_position_ground + det.get_relative_position(
                     station_id, assoc_channel_ids[0])
-                chan_positions_ground_per_groupid_shifted[group_id] = chan_positions_ground_per_groupid[group_id] + core_shift
+                chan_positions_ground_per_groupid_shifted[group_id] = chan_positions_ground_per_groupid[group_id] - core_shift
 
             chan_positions_ground_shifted = np.vstack(
                 [pos for pos in chan_positions_ground_per_groupid_shifted.values()])
@@ -207,7 +208,7 @@ class readCoREASInterpolator:
             evt.set_station(stat)
 
         self.coreas_shower.set_parameter(
-            shp.core, np.array([0., 0., self.coreas_shower[shp.observation_level]]) - core_shift)
+            shp.core, np.array([0., 0., self.coreas_shower[shp.observation_level]]) + core_shift)
         evt.add_sim_shower(self.coreas_shower)
         return evt
 
