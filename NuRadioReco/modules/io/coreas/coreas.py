@@ -122,15 +122,13 @@ def calculate_simulation_weights(positions, zenith, azimuth, site='summit', debu
 
     return weights
 
+
 def observer_to_si_geomagnetic(observer):
     data = np.copy(observer)
     data[:, 1], data[:, 2] = -observer[:, 2], observer[:, 1]
     data[:, 0] *= units.second
-    data[:, 1] *= conversion_fieldstrength_cgs_to_SI
-    data[:, 2] *= conversion_fieldstrength_cgs_to_SI
-    data[:, 3] *= conversion_fieldstrength_cgs_to_SI
+    data[:, 1:4] *= conversion_fieldstrength_cgs_to_SI
     return data
-
 
 
 def make_sim_station(station_id, corsika, observer, channel_ids, weight=None, coreas_observer_format: bool = True):
@@ -165,6 +163,7 @@ def make_sim_station(station_id, corsika, observer, channel_ids, weight=None, co
         data = observer_to_si_geomagnetic(observer)
     else:
         data = np.copy(observer)
+
     cs = coordinatesystems.cstrafo(zenith, azimuth, magnetic_field_vector=magnetic_field_vector)
     efield = cs.transform_from_magnetic_to_geographic(data[:, 1:].T)
     efield = cs.transform_from_ground_to_onsky(efield)
