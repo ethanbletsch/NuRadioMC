@@ -176,7 +176,7 @@ class readCoREASInterpolator:
                 efields = {}
                 for group_id, position in chan_positions_vxB_per_groupid_shifted.items():
                     interpolated = self.signal_interpolator(
-                        *position[:-1], lowfreq=self.lowfreq / units.MHz, highfreq=self.highfreq / units.MHz).T
+                        *position[:-1], lowfreq=self.lowfreq / units.MHz, highfreq=self.highfreq / units.MHz, pulse_centered=True).T
                     interpolated = np.vstack([np.zeros_like(interpolated[0]), *interpolated])
                     efields[group_id] = self.cs.transform_from_onsky_to_ground(
                         interpolated)
@@ -324,6 +324,8 @@ def select_channels_per_station(det: DetectorBase, station_id: int,
     for channel_id in requested_channel_ids:
         if channel_id in det.get_channel_ids(station_id):
             channel_group_id = det.get_channel_group_id(station_id, channel_id)
+            if channel_group_id == -1:
+                channel_group_id = channel_id
             channel_ids[channel_group_id].append(channel_id)
 
     return channel_ids
