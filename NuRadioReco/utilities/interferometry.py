@@ -35,16 +35,9 @@ def get_signal(sum_trace, tstep, window_width=100 * units.ns, kind="power"):
         Signal calculated according to the specified metric
     """
 
-    # find signal peak
-    if kind == "amplitude" or kind == "hilbert_sum":
-        hilbenv = np.abs(signal.hilbert(sum_trace))
-        peak_idx = np.argmax(hilbenv)
-    
-    elif kind == "power":
-        peak_idx = np.argmax(sum_trace)
         
-    # hilbenv = np.abs(signal.hilbert(sum_trace))
-    # peak_idx = np.argmax(hilbenv)
+    hilbenv = np.abs(signal.hilbert(sum_trace))
+    peak_idx = np.argmax(hilbenv)
 
     if kind == "amplitude":
         return hilbenv[peak_idx]
@@ -69,7 +62,7 @@ def get_signal(sum_trace, tstep, window_width=100 * units.ns, kind="power"):
             return np.sum(sum_trace[peak_idx-idx_width:peak_idx+idx_width] ** 2)
 
         elif kind == "hilbert_sum":
-            # hilbenv = np.abs(signal.hilbert(sum_trace))
+            hilbenv = np.abs(signal.hilbert(sum_trace))
             return np.sum(hilbenv[peak_idx-idx_width:peak_idx+idx_width])
 
     else:
