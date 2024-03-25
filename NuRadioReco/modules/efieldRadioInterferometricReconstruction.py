@@ -956,7 +956,7 @@ def get_station_data(evt: Event, det: DetectorBase, cs: coordinatesystems.cstraf
             times.append(time)
             # break  # just take the first efield. TODO: Improve this
 
-            pos.append(det.get_absolute_position(station.get_id()) + electric_field.get_position())
+            pos.append(electric_field.get_position())
     
     traces_vxB = np.array(traces_vxB)
     times = np.array(times)
