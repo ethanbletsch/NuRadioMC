@@ -97,7 +97,7 @@ class slicedShower:
 
     def get_trace(self, ant_name):
         """
-        Get the traces from all slices for a give antenna. The traces are converted to GEO/CE components.
+        Get the traces from all slices for a given antenna. The traces are converted to GEO/CE components.
 
         Parameters
         ----------
