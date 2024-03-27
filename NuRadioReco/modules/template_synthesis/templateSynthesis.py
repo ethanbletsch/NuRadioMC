@@ -152,18 +152,14 @@ class groundElementSynthesis:
             c[:, :, np.newaxis] * frequencies[np.newaxis, np.newaxis, :] ** 2
         ) + d_noise
 
-    def set_template(self, shower_xmax, trace_geo, trace_ce, sampling_d=2e-10 * units.s):
+    def set_template(self, shower_xmax, trace_geo, trace_ce, freq):
         """
         Sets the template traces for GEO and CE components. Assumes the traces are already normalised
-        with particle numbers!
+        with particle numbers and that the central frequency has already been removed from the frequency
+        array!
         """
-        freq_geo = np.fft.rfftfreq(trace_geo.shape[-1], sampling_d / units.s) * units.Hz
-        freq_ce = np.fft.rfftfreq(trace_ce.shape[-1], sampling_d / units.s) * units.Hz
 
-        # Frequency arrays should be the same
-        assert np.all(freq_geo == freq_ce), "Frequencies differ for GEO and CE"
-
-        self.__template_frequencies = freq_geo
+        self.__template_frequencies = freq
 
         spectrum_geo = np.fft.rfft(trace_geo, norm='ortho', axis=-1)  # SLICES x FREQ
         spectrum_ce = np.fft.rfft(trace_ce, norm='ortho', axis=-1)
@@ -175,7 +171,7 @@ class groundElementSynthesis:
         phase_ce = np.angle(spectrum_ce)
 
         # Normalise
-        normalisation = self._calculate_amp_fit(shower_xmax, freq_geo)  # {GEO, CE, CE_LIN} x SLICES x FREQ
+        normalisation = self._calculate_amp_fit(shower_xmax, freq / units.GHz)  # {GEO, CE, CE_LIN} x SLICES x FREQ
 
         self.__template_spectrum_geo = np.stack((abs_geo / normalisation[0], phase_geo))
         self.__template_spectrum_ce = np.stack((abs_ce / normalisation[1], phase_ce))
@@ -187,7 +183,8 @@ class groundElementSynthesis:
         if not self.has_template:
             raise RuntimeError(f"Template has not been set yet for antenna {self.name}")
 
-        normalisation = self._calculate_amp_fit(target_xmax, self.__template_frequencies)  # COMPONENT x SLICES x FREQ
+        normalisation = self._calculate_amp_fit(target_xmax,
+                                                self.__template_frequencies / units.GHz)  # COMPONENT x SLICES x FREQ
 
         synth_geo = self.__template_spectrum_geo[0] * normalisation[0] * np.exp(1j * self.__template_spectrum_geo[1])
         synth_ce = self.__template_spectrum_ce[0] * normalisation[1] * np.exp(1j * self.__template_spectrum_ce[1])
@@ -321,7 +318,9 @@ class templateSynthesis:
             geo_filtered /= shower_long_profile[:self.__n_slices, np.newaxis]
             ce_filtered /= shower_long_profile[:self.__n_slices, np.newaxis]
 
-            antenna.set_template(origin_shower.xmax, geo_filtered, ce_filtered, sampling_d=shower_sampling_res)
+            frequencies = np.fft.rfftfreq(geo_filtered.shape[-1], d=shower_sampling_res / units.s) * units.Hz
+
+            antenna.set_template(origin_shower.xmax, geo_filtered, ce_filtered, frequencies - self.__freq_center)
 
     @register_run()
     def run(self, target_xmax, long_profile):
