@@ -29,7 +29,7 @@ def filter_trace(trace, trace_sampling, f_min, f_max, sample_axis=0):
     to_roll = int(trace.shape[sample_axis] / 2 - max_index)
 
     # Roll all traces such that max is in the middle
-    roll_pulse = np.roll(trace, to_roll)
+    roll_pulse = np.roll(trace, to_roll, axis=sample_axis)
 
     # FFT, filter, IFFT
     spectrum = np.fft.rfft(roll_pulse, axis=sample_axis)
