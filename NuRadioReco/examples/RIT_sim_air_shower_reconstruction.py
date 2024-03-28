@@ -59,7 +59,7 @@ for event, gen_det in readCoREASShower.run():
                                         30*units.MHz, 80*units.MHz])
 
     efieldInterferometricDepthReco.run(
-        event, gen_det, use_MC_geometry=True, use_MC_pulses=True)
+        event, gen_det, use_MC_geometry=True, use_mc_pulses=True)
     # efieldInterferometricAxisReco.run(
     #     event, gen_det, use_MC_geometry=True, use_MC_pulses=True)
     
