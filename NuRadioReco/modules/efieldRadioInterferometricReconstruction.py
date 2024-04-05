@@ -396,7 +396,6 @@ class efieldInterferometricDepthReco:
         shower.set_parameter(shp.interferometric_shower_maximum, xrit * units.g / units.cm2)
 
         #TODO: Add calibration Xmax(Xrit, theta, ...)?
-        
         # for plotting
         self._data["xrit"].append(xrit)
         self._data["xmax"].append(shower[shp.shower_maximum] / (units.g / units.cm2))
@@ -421,7 +420,7 @@ class efieldInterferometricDepthReco:
 
 class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
     """
-    Class to reconstruct the shower axis with beamforming.     
+    Class to reconstruct the shower axis with beamforming.
     """
     def __init__(self):
         super().__init__()
@@ -479,7 +478,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
                 if False:
                     from scipy.signal import hilbert
-                    fig = plt.figure() 
+                    fig = plt.figure()
                     ax = fig.add_subplot()
                     # ax.plot(sum_trace, color="r", label="sum_trace")
                     ax.plot((np.abs(sum_trace) - np.abs(hilbert(sum_trace))) / np.abs(sum_trace), color="b", label="|sum_trace| - |hilbert|")
@@ -494,11 +493,11 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
         if not self.multiprocessing:
             signals = []
-            for xdx,x in enumerate(tqdm(xs)):
+            for xdx,x in enumerate(xs):
                 signals.append(yiteration(xdx, x))
         elif self.multiprocessing:
             signals = Parallel(n_jobs=max(min(cpu_count()-2, len(xs)), 2))(
-                delayed(yiteration)(xdx, x) for xdx, x in enumerate(tqdm(xs)))
+                delayed(yiteration)(xdx, x) for xdx, x in enumerate(xs))
 
         signals = np.vstack(signals)
         idx = np.argmax(signals)
