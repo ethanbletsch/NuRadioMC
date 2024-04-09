@@ -18,12 +18,10 @@ import sys
 import copy
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-from scipy.signal import resample
 
 from typing import Optional
 
 from tqdm import tqdm
-from joblib import Parallel, delayed
 from os import cpu_count
 
 import logging
@@ -335,6 +333,7 @@ class efieldInterferometricDepthReco:
             mc_jitter: Optional[float] = None,
             upper_depth: float = 1000.,
             lower_depth: float = 400.,
+            geometry: Optional[tuple] = None
             ):
         """ 
         Run interferometric reconstruction of depth of coherent signal.
@@ -349,7 +348,7 @@ class efieldInterferometricDepthReco:
             Detector description
 
         shower: BaseShower
-            shower to extract geometry from. Conventional: `evt.get_first_shower()` or `evt.get_first_sim_shower()`
+            Shower to extract geometry and atmospheric information from. Conventional: `evt.get_first_shower()` or `evt.get_first_sim_shower()`
 
         use_mc_pulses : bool
             if true, take electric field trace from sim_station
@@ -359,10 +358,24 @@ class efieldInterferometricDepthReco:
 
         mc_jitter: Optional[float] (with unit of time, default: None)
             Standard deviation of Gaussian noise added to timings, if set.
+
+        geometry: Optional[tuple] = (axis, core) (defaul: None)
+            Geometry to be used to reconstruct XRIT; ignores the geometry of `shower` (but keeps magnetic field vector)
         """
 
         self.update_atmospheric_model_and_refractivity_table(shower)
-        core, shower_axis, cs = get_geometry_and_transformation(shower)
+        if geometry is not None:
+            shower_axis, core = geometry
+            def get_theta_phi(axis: np.ndarray):
+                x = axis[...,0]
+                y = axis[...,1]
+                z = axis[...,2]
+                phi = np.arctan2(y,x)
+                theta = np.arctan2(np.sqrt(x**2 + y**2), z)
+                return theta, phi
+            cs = coordinatesystems.cstrafo(*get_theta_phi(shower_axis), shower[shp.magnetic_field_vector])
+        else:
+            core, shower_axis, cs = get_geometry_and_transformation(shower)
 
         traces_vxB, times, pos = get_station_data(
             evt, det, cs, use_mc_pulses, station_ids=station_ids, mc_jitter=mc_jitter, n_sampling=256)
@@ -377,7 +390,6 @@ class efieldInterferometricDepthReco:
             depths, depths_final, signals_tmp, signals_final, rit_parameters = \
                 self.reconstruct_interferometric_depth(
                     traces_vxB, times, pos, shower_axis, core, return_profile=True, lower_depth=lower_depth, upper_depth=upper_depth)
-
             xrit = rit_parameters[1]
             fig, ax = plt.subplots(1)
             ax.scatter(depths, signals_tmp, color="blue", label="signals_tmp", s=2, zorder=1.1)
@@ -496,6 +508,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             for xdx,x in enumerate(xs):
                 signals.append(yiteration(xdx, x))
         elif self.multiprocessing:
+            from joblib import Parallel, delayed
             signals = Parallel(n_jobs=max(min(cpu_count()-2, len(xs)), 2))(
                 delayed(yiteration)(xdx, x) for xdx, x in enumerate(xs))
 
