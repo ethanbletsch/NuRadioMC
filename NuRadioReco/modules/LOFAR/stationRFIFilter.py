@@ -420,6 +420,7 @@ class stationRFIFilter:
         self.__rfi_trace_length = None
         self.__station_list = None
         self.__metadata_dir = None
+        self.__median_spectrum = None
 
     @property
     def station_list(self):
@@ -476,6 +477,7 @@ class stationRFIFilter:
             The event on which to run the filter.
         """
         stations_dict = self.station_list
+        self.__median_spectrum = {}
 
         for station in event.get_stations():
             station_name = f'CS{station.get_id():03}'
@@ -551,8 +553,10 @@ class stationRFIFilter:
             station.set_parameter(stationParameters.flagged_channels, flagged_channel_ids)
 
             # Set spectral amplitude to zero for channels with RFI
+            spectra_before_flag = []
             for channel in station.iter_channels():
                 trace_fft = channel.get_frequency_spectrum()
+                spectra_before_flag.append(np.copy(trace_fft))
                 sample_rate = channel.get_sampling_rate()
 
                 # Reject DC and first harmonic
@@ -563,6 +567,41 @@ class stationRFIFilter:
                 trace_fft[dirty_channels] *= 0.0
 
                 channel.set_frequency_spectrum(trace_fft, sample_rate)
+            self.__median_spectrum[station.get_id()] = np.median(np.abs(np.asarray(spectra_before_flag)), axis=0)
 
-    def end(self):
-        pass
+    def end(self, event=None):
+        if event is not None:
+            for station in event.get_stations():
+                self.plot_median_freq_spectrum(station, rfi_cleaned=False, flagging=True)
+                self.plot_median_freq_spectrum(station, rfi_cleaned=True, flagging=False)
+
+    def plot_median_freq_spectrum(self, station, rfi_cleaned: bool = False, flagging: bool = False):
+        import matplotlib.pyplot as plt
+        if flagging and rfi_cleaned:
+            logger.warning("plot_median_freq_spectrum flagging the rfi_cleaned channels in a clean trace is weird, but ok")
+
+        if rfi_cleaned:
+            # median spectrum from channels in the station. Since this function is expected to run in the .end() after .run(), the traces there are cleaned
+            spectra = []
+            for channel in station.iter_channels():
+                spectrum = channel.get_frequency_spectrum()
+                spectra.append(np.abs(spectrum))
+            median_spectrum = np.median(np.array(spectra), axis=0)
+        else:
+            # pre rfi cleaned spectrum stored
+            median_spectrum = self.__median_spectrum[station.get_id()]
+
+        fig = plt.figure()
+        ax = fig.add_subplot()
+        log_median_spectrum = np.log10(median_spectrum)
+        channel = station.get_channel(station.get_channel_ids()[0])
+        freq_MHz = channel.get_frequencies() / units.MHz
+        ax.plot(freq_MHz, log_median_spectrum,zorder=1)
+        if flagging:
+            dirty_channels = station[stationParameters.dirty_fft_channels]
+            ax.scatter(freq_MHz[dirty_channels], log_median_spectrum[dirty_channels], marker="x", color="red", zorder=2)
+        ax.set_xlabel("Frequency [MHz]")
+        ax.set_ylabel("Log-Spectral Power [ADU]")
+        station_name = f'CS{station.get_id():03}'
+        ax.set_title(f"{station_name} Median frequency spectrum")
+        plt.show()
