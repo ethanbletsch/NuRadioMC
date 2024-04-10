@@ -62,7 +62,7 @@ class readCoREASInterpolator:
                 self.starshape_showerplane[..., 0],
                 self.starshape_showerplane[..., 1],
                 self.signals[..., 1:],
-                self.trace_start,
+                self.trace_start / units.s,
                 lowfreq=self.lowfreq / units.MHz,  # THIS OPTION IS UNUSED  IN traceinterp.interp2d_fourier.__init__
                 highfreq=self.highfreq / units.MHz,  # THIS OPTION IS UNUSED  IN traceinterp.interp2d_fourier.__init__
                 sampling_period=self.sampling_period / units.s,
@@ -173,7 +173,8 @@ class readCoREASInterpolator:
 
             # flattened_positions = np.vstack(
             #     [pos for pos in chan_positions_vxB_per_groupid.values()])
-            if np.any(~position_contained_in_starshape(chan_positions_vxB_shifted, self.starshape_showerplane)):
+            contained = position_contained_in_starshape(chan_positions_vxB_shifted, self.starshape_showerplane)
+            if np.any(~contained):
                 logger.warning(
                     "Channel positions are not all contained in the starshape! Will extrapolate."
                 )
@@ -182,21 +183,27 @@ class readCoREASInterpolator:
             if self.kind == "trace":
                 efields = {}
                 trace_start = {}
-                for group_id, position in chan_positions_vxB_per_groupid_shifted.items():
-                    interpolated, pulse_toa_per_pol = self.signal_interpolator(
-                        *position[:-1],
-                        lowfreq=self.lowfreq / units.MHz,
-                        highfreq=self.highfreq / units.MHz,
-                        account_for_arrival_times = True,
-                        account_for_timing = False,
-                        pulse_centered = False
-                        )
-                    interpolated = interpolated.T
-                    interpolated = np.vstack([np.zeros_like(interpolated[0]), *interpolated])
+                for idx, (group_id, position) in enumerate(chan_positions_vxB_per_groupid_shifted.items()):
+                    if not contained[idx]:
+                        interpolated = np.zeros((3, self.signals.shape[-2]))
+                        pulse_toa_per_pol = [self.signal_interpolator.interpolators_arrival_times(*position[:-1])]
+                    else:
+                        interpolated, pulse_toa_per_pol = self.signal_interpolator(
+                            *position[:-1],
+                            lowfreq=self.lowfreq / units.MHz,
+                            highfreq=self.highfreq / units.MHz,
+                            account_for_arrival_times = True,
+                            account_for_timing = False,
+                            pulse_centered = True
+                            )
+                        interpolated = interpolated.T
+                        interpolated = np.vstack([np.zeros_like(interpolated[0]), *interpolated]) # add r polarization back to trace, as zeroes
                     efields[group_id] = self.cs.transform_from_onsky_to_ground(
                         interpolated)
-                    trace_start[group_id] = pulse_toa_per_pol[0] - np.argmax(np.linalg.norm(interpolated,axis=-1)) * self.sampling_period # timing is based on sum over polarization, and therefore identical per polarization
-                
+                    # trace_start[group_id] = 0.
+                    # trace_start[group_id] = tstart
+                    trace_start[group_id] = pulse_toa_per_pol[0] * units.s - np.argmax(np.linalg.norm(interpolated,axis=-1)) * self.sampling_period # timing is based on sum over polarization, and therefore identical per polarization
+
                 sim_stat = make_sim_station(
                     station_id, self.corsika, chan_id_per_groupid, chan_positions_ground_per_groupid, efields=efields, trace_start=trace_start
                 )
