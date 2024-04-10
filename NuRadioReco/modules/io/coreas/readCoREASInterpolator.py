@@ -192,17 +192,21 @@ class readCoREASInterpolator:
                             *position[:-1],
                             lowfreq=self.lowfreq / units.MHz,
                             highfreq=self.highfreq / units.MHz,
-                            account_for_arrival_times = True,
+                            return_arrival_times = True,
                             account_for_timing = False,
                             pulse_centered = True
                             )
+                        # pulse_toa_per_pol (though identical per polarization) should contain the absolute time of the the bin at the centre of the trace,
+                        # which is set as the hilbert envelope 30-80 MHz max in signal_interpolation_fourier.py
+
                         interpolated = interpolated.T
                         interpolated = np.vstack([np.zeros_like(interpolated[0]), *interpolated]) # add r polarization back to trace, as zeroes
                     efields[group_id] = self.cs.transform_from_onsky_to_ground(
                         interpolated)
                     # trace_start[group_id] = 0.
                     # trace_start[group_id] = tstart
-                    trace_start[group_id] = pulse_toa_per_pol[0] * units.s - np.argmax(np.linalg.norm(interpolated,axis=-1)) * self.sampling_period # timing is based on sum over polarization, and therefore identical per polarization
+                    trace_start[group_id] = pulse_toa_per_pol[0] * units.s - (interpolated.shape[1] / 2) * self.sampling_period # correct for trace centering
+
 
                 sim_stat = make_sim_station(
                     station_id, self.corsika, chan_id_per_groupid, chan_positions_ground_per_groupid, efields=efields, trace_start=trace_start
