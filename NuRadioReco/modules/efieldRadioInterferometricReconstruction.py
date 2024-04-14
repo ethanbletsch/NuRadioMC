@@ -695,11 +695,12 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             sh = np.concatenate([s.flatten() for s in sh[iterlim:]])
             fitfunc = lorentzian_2d
             p, pcov = curve_fit(fitfunc, xy, sh, p0=[1,1,1])
-            fig = plt.figure()
-            ax = fig.add_subplot()
-            sm = ax.scatter(*xy, c=sh - fitfunc(xy, *p))
-            plt.colorbar(sm)
-            plt.show()
+            if self._debug:
+                fig = plt.figure()
+                ax = fig.add_subplot()
+                sm = ax.scatter(*xy, c=sh - fitfunc(xy, *p))
+                plt.colorbar(sm)
+                plt.show()
             return point_found, weight, p, np.diag(pcov)
 
         return point_found, weight
