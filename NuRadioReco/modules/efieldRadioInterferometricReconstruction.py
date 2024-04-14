@@ -509,7 +509,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                 signals.append(yiteration(xdx, x))
         elif self.multiprocessing:
             from joblib import Parallel, delayed
-            signals = Parallel(n_jobs=max(min(cpu_count()-2, len(xs)), 2))(
+            signals = Parallel(n_jobs=max(min(cpu_count() // 2, len(xs)), 2))(
                 delayed(yiteration)(xdx, x) for xdx, x in enumerate(xs))
 
         signals = np.vstack(signals)
@@ -523,7 +523,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             shower_axis_inital, core, depth, cs: coordinatesystems.cstrafo,
             shower_axis_mc, core_mc,
             relative=False, initial_grid_spacing=60, centered_around_truth=True,
-            cross_section_size=1000, deg_resolution=np.deg2rad(0.005)):
+            cross_section_size=1000, deg_resolution=np.deg2rad(0.005), fit_lateral: bool = False):
         """
         Sampling the "cross section", i.e., 2d-lateral distribution of the beam formed signal for a slice in the atmosphere. 
         It is looking for the maximum in the lateral distribution with an (stupid) iterative grid search. 
@@ -637,10 +637,14 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                             initial_grid_spacing, initial_grid_spacing)
 
         iloop = 0
+        xh, yh, sh = [], [], []
         while True:
-
             idx, signals = self.find_maximum_in_plane(
                 xs, ys, p_axis, station_positions, traces, times, cs=cs)
+
+            xh.append(xs)
+            yh.append(ys)
+            sh.append(signals)
 
             if self._debug:
                 # from AERAutilities import pyplots, pyplots_utils # for mpl rc
@@ -665,12 +669,40 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             xs = np.linspace(x_max - dx, x_max + dx, 5)
             ys = np.linspace(y_max - dy, y_max + dy, 5)
 
+
+
         weight = np.amax(signals)
 
         xfound = xs[int(idx // len(ys))]
         yfound = ys[int(idx % len(ys))]
+
         point_found = p_axis + \
             cs.transform_from_vxB_vxvxB(np.array([xfound, yfound, 0]))
+
+        if fit_lateral:
+            # def gaussian_2d_fixpos(xy, sigmax, sigmay):
+            #     return gaussian_2d(xy, weight, xfound, yfound, sigmax, sigmay)
+
+            def lorentzian_2d(xy, alpha, lx, ly):
+                return weight / (np.power(1., 1/alpha) + np.sum(np.square((xy - np.asarray([xfound, yfound])[:, np.newaxis]) / np.asarray([lx, ly])[:, np.newaxis]), axis=0))**alpha
+
+            xconcat, yconcat = [], []
+            iterlim = 0
+            for xs, ys in zip(xh[iterlim:], yh[iterlim:]):
+                ymesh, xmesh = np.meshgrid(ys, xs)
+                xconcat.append(xmesh.flatten())
+                yconcat.append(ymesh.flatten())
+            xy = (np.hstack(xconcat), np.hstack(yconcat))
+            sh = np.concatenate([s.flatten() for s in sh[iterlim:]])
+            fitfunc = lorentzian_2d
+            p, pcov = curve_fit(fitfunc, xy, sh, p0=[1,1,1])
+            fig = plt.figure()
+            ax = fig.add_subplot()
+            sm = ax.scatter(*xy, c=sh - fitfunc(xy, *p))
+            plt.colorbar(sm)
+            plt.show()
+            
+            return point_found, weight, p, np.diag(pcov)
 
         return point_found, weight
 
@@ -787,7 +819,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             found_points.append(found_point)
             weights.append(weight)
 
-        if 0:
+        if False:
             while True:
                 if np.argmax(weights) != 0:
                     break
@@ -825,6 +857,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         return direction_rec, core_rec
 
         # return found_points, weights
+
 
     @register_run()
     def run(self, evt, det, shower: BaseShower, station_ids: Optional[list] = None, depths: Optional[list] = None, use_mc_pulses: bool=True, mc_jitter: Optional[float] = None, initial_grid_spacing: float = 60, lateral_grid_size: float = 1000, multiprocessing: bool = False):
@@ -872,6 +905,164 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         shower.set_parameter(shp.interferometric_shower_axis, direction_rec)
         shower.set_parameter(shp.interferometric_core, core_rec)
 
+    def end(self):
+        pass
+
+class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
+    def __init__(self):
+        super().__init__()
+
+    
+    def determine_lateral_shower_width(
+            self, 
+            traces, times, station_positions,
+            shower_axis, core,
+            magnetic_field_vector,
+            depth: float,
+            is_mc=True,
+            initial_grid_spacing=60,
+            cross_section_size=1000):
+        """
+        Determine the showerplane coordinates widths of a lateral cross section profile.
+
+        traces : array(number_of_antennas, samples)
+            Electric field traces (one polarisation of it, usually vxB) for all antennas/stations.
+
+        times : array(number_of_antennas, samples)
+            Time vectors corresponding to the electric field traces.
+
+        station_positions : array(number_of_antennas, 3)
+            Position of each antenna.
+
+        shower_axis_inital : array(3,)
+            Axis/direction which is used as initial guess for the true shower axis.
+            Around this axis the interferometric signals are sample on 2-d planes.
+
+        core : array(3,)
+            Shower core which is used as initial guess. Keep in mind that the altitudes (z-coordinate) matters.
+
+        magnetic_field_vector : array(3,)
+            Magnetic field vector of the site you are using.
+
+        depth: float
+            Slant depth at which to fit the lateral distribution
+
+        is_mc : bool
+            If true, interprete the provided shower axis as truth and add some gaussian smearing to optain an
+            inperfect initial guess for the shower axis (Default: True). 
+
+        initial_grid_spacing : double
+            Spacing of your grid points in meters (Default: 60m)
+
+        cross_section_size : double
+            Side length on the 2-d planes (slice) along which the maximum around the initial axis is sampled in meters
+            (Default: 1000m).
+
+        """
+        
+
+        if is_mc:
+            zenith_mc, azimuth_mc = hp.cartesian_to_spherical(*shower_axis)
+
+            # smeare mc axis.
+            zenith_inital = zenith_mc + np.deg2rad(np.random.normal(0, 0.5))
+            azimuth_inital = azimuth_mc + np.deg2rad(np.random.normal(0, 0.5))
+            shower_axis_inital = hp.spherical_to_cartesian(
+                zenith=zenith_inital, azimuth=azimuth_inital)
+
+        else:
+            shower_axis_inital = shower_axis 
+            core_inital = core 
+            zenith_inital, azimuth_inital = hp.cartesian_to_spherical(
+                *shower_axis)
+
+            shower_axis, core = None, None
+
+            raise ValueError("is_mc=False is not yet properly implemented!")
+
+        cs = coordinatesystems.cstrafo(
+            zenith_inital, azimuth_inital, magnetic_field_vector=magnetic_field_vector)
+        
+        if is_mc:
+            core_inital = cs.transform_from_vxB_vxvxB_2D(
+                np.array([np.random.normal(0, 100), np.random.normal(0, 100), 0]), core)
+
+        deg_resolution = np.deg2rad(0.005)
+
+        relative = False
+        centered_around_truth = True
+
+        def sample_lateral_cross_section_placeholder(dep):
+            """ 
+            Run sample_lateral_cross_section for a particular depth.
+            
+            Parameters
+            ----------
+
+            dep : double
+                Depth along the axis at which the cross section is sampled in g/cm2.
+            
+            """
+            return self.sample_lateral_cross_section(
+                traces, times, station_positions,
+                shower_axis_inital, core_inital, dep, cs,
+                shower_axis, core,
+                relative=relative, initial_grid_spacing=initial_grid_spacing,
+                centered_around_truth=centered_around_truth,
+                cross_section_size=cross_section_size, deg_resolution=deg_resolution, fit_lateral=True)
+
+        found_point, weight, p, pvar = sample_lateral_cross_section_placeholder(depth)
+        logger.info(f"index of lorentzian RIT profile {p[0]} +- {np.sqrt(pvar[0])}")
+        logger.info(f"vxB width of vxB RIT profile {p[1]} +- {np.sqrt(pvar[1])}")
+        logger.info(f"vxvxB width of vxB RIT profile {p[2]} +- {np.sqrt(pvar[2])}")
+        return p
+
+    @register_run()
+    def run(self, evt, det, shower: BaseShower, depth: float, station_ids: Optional[list] = None, use_mc_pulses: bool=True, mc_jitter: Optional[float] = None, initial_grid_spacing: float = 60, lateral_grid_size: float = 1000, multiprocessing: bool = False):
+        """ 
+        Run interferometric reconstruction of depth of coherent signal.
+
+        Parameters
+        ----------
+
+        evt : Event
+            Event to run the module on.
+        
+        det : Detector
+            Detector description
+
+        shower: BaseShower
+            shower to extract geometry from. Conventional: `evt.get_first_shower()` or `evt.get_first_sim_shower()`
+
+        depths: Optional[list] (default: None)
+            slant depths in g/cm^2  at which to sample lateral profiles. None results in [500, 600, 700, 800, 900, 1000].
+
+        use_mc_pulses : bool (default: True)
+            if true, take electric field trace from sim_station
+
+        station_ids: Optional[list] (default: None)
+            station_ids whose channels will be read out. For all stations, use `evt.get_station_ids()`
+
+        mc_jitter: Optional[float] (with unit of time, default: None)
+            Standard deviation of Gaussian noise added to timings, if set.
+
+        initial_grid_spoacing: float (default: 60*units.m)
+            initial lateral grid spacing to use.
+
+        """
+        self.multiprocessing = multiprocessing
+        self.update_atmospheric_model_and_refractivity_table(shower)
+        core, shower_axis, cs = get_geometry_and_transformation(shower)
+
+        traces_vxB, times, pos = get_station_data(
+            evt, det, cs, use_mc_pulses, station_ids=station_ids, mc_jitter=mc_jitter, n_sampling=256)
+
+        index, sigma_vxB, sigma_vxvxB = self.determine_lateral_shower_width(traces_vxB, times, pos, shower_axis, core, shower[shp.magnetic_field_vector], depth, initial_grid_spacing=initial_grid_spacing, cross_section_size=lateral_grid_size)
+
+        shower.set_parameter(shp.interferometric_index, index)
+        shower.set_parameter(shp.interferometric_width_vxB, sigma_vxB)
+        shower.set_parameter(shp.interferometric_width_vxvxB, sigma_vxvxB)
+    
     def end(self):
         pass
 
@@ -958,8 +1149,9 @@ def get_station_data(evt: Event, det: DetectorBase, cs: coordinatesystems.cstraf
         
         electric_field: ElectricField
         for electric_field in station.get_electric_fields():
-            traces = cs.transform_to_vxB_vxvxB(
-                cs.transform_from_onsky_to_ground(electric_field.get_trace()))
+            # traces = cs.transform_to_vxB_vxvxB(
+            #     cs.transform_from_onsky_to_ground(electric_field.get_trace()))
+            traces = cs.transform_to_vxB_vxvxB(electric_field.get_trace())
             trace_vxB = traces[0]
             time = copy.copy(electric_field.get_times())
             
@@ -1048,3 +1240,9 @@ def plot_lateral_cross_section(xs, ys, signals, mc_pos=None, fname=None, title=N
         plt.savefig(fname)
     else:
         plt.show()
+
+    
+def gaussian_2d(xy, A, mux, muy, sigmax, sigmay):
+    mu = np.asarray([mux, muy])
+    sigma = np.asarray([sigmax, sigmay])
+    return A*np.exp(np.sum(-np.square((xy - mu[:, np.newaxis]) / sigma[:, np.newaxis]), axis=0))
