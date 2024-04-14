@@ -1012,7 +1012,7 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         return p
 
     @register_run()
-    def run(self, evt, det, shower: BaseShower, depth: float, station_ids: Optional[list] = None, use_mc_pulses: bool=True, mc_jitter: Optional[float] = None, initial_grid_spacing: float = 60, lateral_grid_size: float = 1000, multiprocessing: bool = False):
+    def run(self, evt, det, shower: BaseShower, depth: float, station_ids: Optional[list] = None, use_mc_pulses: bool=True, mc_jitter: Optional[float] = None, initial_grid_spacing: float = 60, lateral_grid_size: float = 1000, multiprocessing: bool = False, geometry: Optional[tuple] = None):
         """
         Run interferometric reconstruction of depth of coherent signal.
 
@@ -1046,7 +1046,18 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         """
         self.multiprocessing = multiprocessing
         self.update_atmospheric_model_and_refractivity_table(shower)
-        core, shower_axis, cs = get_geometry_and_transformation(shower)
+        if geometry is not None:
+            shower_axis, core = geometry
+            def get_theta_phi(axis: np.ndarray):
+                x = axis[...,0]
+                y = axis[...,1]
+                z = axis[...,2]
+                phi = np.arctan2(y,x)
+                theta = np.arctan2(np.sqrt(x**2 + y**2), z)
+                return theta, phi
+            cs = coordinatesystems.cstrafo(*get_theta_phi(shower_axis), shower[shp.magnetic_field_vector])
+        else:
+            core, shower_axis, cs = get_geometry_and_transformation(shower)
 
         traces_vxB, times, pos = get_station_data(
             evt, det, cs, use_mc_pulses, station_ids=station_ids, mc_jitter=mc_jitter, n_sampling=256)
