@@ -125,6 +125,9 @@ class showerParameters(Enum):
     interferometric_shower_maximum = 120  #: depth of the maximum of the longitudinal profile of the beam-formed signal
     interferometric_shower_axis = 121  #: shower axis (direction) derived from beam-formed signal
     interferometric_core = 122  #: core (intersection of shower axis with obs plane) derived from beam-formed signal
+    interferometric_width_vxB = 123 # scale in the vxB direction of the lateral RIT profile at interferometric_shower_maximum
+    interferometric_width_vxvxB = 124 # scale in the vxvxB direction of the lateral RIT profile at interferometric_shower_maximum
+    interferometric_width_index = 125 # lorentzian index of the lateral RIT profile at interferometric_shower_maximum
 
 class particleParameters(Enum):
     parent_id = 1 #: the entry number of the parent particle, None if primary.
