@@ -679,30 +679,27 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             cs.transform_from_vxB_vxvxB(np.array([xfound, yfound, 0]))
 
         if fit_lateral:
-            iteration_cutoff = 2
+            # def gaussian_2d_fixpos(xy, sigmax, sigmay):
+            #     return gaussian_2d(xy, weight, xfound, yfound, sigmax, sigmay)
+
+            def lorentzian_2d(xy, alpha, lx, ly):
+                return weight / (np.power(1., 1/alpha) + np.sum(np.square((xy - np.asarray([xfound, yfound])[:, np.newaxis]) / np.asarray([lx, ly])[:, np.newaxis]), axis=0))**alpha
+
             xconcat, yconcat = [], []
-            for xs, ys in zip(xh[iteration_cutoff:], yh[iteration_cutoff:]):
-                xmesh, ymesh = np.meshgrid(xs, ys)
+            iterlim = 0
+            for xs, ys in zip(xh[iterlim:], yh[iterlim:]):
+                ymesh, xmesh = np.meshgrid(ys, xs)
                 xconcat.append(xmesh.flatten())
                 yconcat.append(ymesh.flatten())
             xy = (np.hstack(xconcat), np.hstack(yconcat))
-
-            sh = np.concatenate([s.flatten() for s in sh[iteration_cutoff:]])
-
-            def gaussian_2d_fixpos(xy, sigmax, sigmay):
-                return gaussian_2d(xy, weight, xfound, yfound, sigmax, sigmay)
-
-            def lorentzian_2d_fixpos(xy, alpha, lx, ly):
-                return weight / (np.power(1., 1./alpha) + (np.sum(np.square(xy - np.asarray([xfound, yfound])[:, np.newaxis] / np.asarray([lx, ly])[:, np.newaxis]), axis=0)))**alpha
-            fitfunc = lorentzian_2d_fixpos
-            p, pcov = curve_fit(fitfunc, xy, sh, p0=[1, 1, 1])
-
-            # fig = plt.figure()
-            # ax = fig.add_subplot()
-            # sm = ax.scatter(*xy, c=sh - fitfunc(xy, *p), cmap=plt.cm.coolwarm)
-            # plt.colorbar(sm, label="residuals")
-            # plt.show()
-
+            sh = np.concatenate([s.flatten() for s in sh[iterlim:]])
+            fitfunc = lorentzian_2d
+            p, pcov = curve_fit(fitfunc, xy, sh, p0=[1,1,1])
+            fig = plt.figure()
+            ax = fig.add_subplot()
+            sm = ax.scatter(*xy, c=sh - fitfunc(xy, *p))
+            plt.colorbar(sm)
+            plt.show()
             return point_found, weight, p, np.diag(pcov)
 
         return point_found, weight
@@ -981,7 +978,6 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
 
         cs = coordinatesystems.cstrafo(
             zenith_inital, azimuth_inital, magnetic_field_vector=magnetic_field_vector)
-
         if is_mc:
             core_inital = cs.transform_from_vxB_vxvxB_2D(
                 np.array([np.random.normal(0, 100), np.random.normal(0, 100), 0]), core)
@@ -1000,7 +996,6 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
 
             dep : double
                 Depth along the axis at which the cross section is sampled in g/cm2.
-
             """
             return self.sample_lateral_cross_section(
                 traces, times, station_positions,
@@ -1011,9 +1006,9 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
                 cross_section_size=cross_section_size, deg_resolution=deg_resolution, fit_lateral=True)
 
         found_point, weight, p, pvar = sample_lateral_cross_section_placeholder(depth)
-        logger.info(f"Lorentzian index {p[0]} += {np.sqrt(pvar[0])}")
-        logger.info(f"vxB width of vxB RIT profile {p[-2]} += {np.sqrt(pvar[-2])}")
-        logger.info(f"vxvxB width of vxB RIT profile {p[-1]} += {np.sqrt(pvar[-1])}")
+        logger.info(f"index of lorentzian RIT profile {p[0]} +- {np.sqrt(pvar[0])}")
+        logger.info(f"vxB width of vxB RIT profile {p[1]} +- {np.sqrt(pvar[1])}")
+        logger.info(f"vxvxB width of vxB RIT profile {p[2]} +- {np.sqrt(pvar[2])}")
         return p
 
     @register_run()
@@ -1057,7 +1052,6 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
             evt, det, cs, use_mc_pulses, station_ids=station_ids, mc_jitter=mc_jitter, n_sampling=256)
 
         index, sigma_vxB, sigma_vxvxB = self.determine_lateral_shower_width(traces_vxB, times, pos, shower_axis, core, shower[shp.magnetic_field_vector], depth, initial_grid_spacing=initial_grid_spacing, cross_section_size=lateral_grid_size)
-
 
         shower.set_parameter(shp.interferometric_width_index, index)
         shower.set_parameter(shp.interferometric_width_vxB, sigma_vxB)
