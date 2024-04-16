@@ -185,27 +185,22 @@ class readCoREASInterpolator:
                 trace_start = {}
                 for idx, (group_id, position) in enumerate(chan_positions_vxB_per_groupid_shifted.items()):
                     if not contained[idx]:
-                        interpolated = np.zeros((3, self.signals.shape[-2]))
-                        pulse_toa_per_pol = self.signal_interpolator.interpolators_arrival_times(*position[:-1])
+                        timeseries = np.zeros((3, self.signals.shape[-2]))
+                        trace_start_time = self.signal_interpolator.interpolators_arrival_times(*position[:-1])
                     else:
-                        interpolated, pulse_toa_per_pol = self.signal_interpolator(
+                        timeseries, trace_start_time, _, _= self.signal_interpolator(
                             *position[:-1],
                             lowfreq=self.lowfreq / units.MHz,
                             highfreq=self.highfreq / units.MHz,
-                            return_arrival_times = True,
-                            account_for_timing = False,
-                            pulse_centered = True
+                            account_for_timing = True,
+                            pulse_centered = True,
+                            full_output = True
                             )
-                        # pulse_toa_per_pol (though identical per polarization) should contain the absolute time of the the bin at the centre of the trace,
-                        # which is set as the hilbert envelope 30-80 MHz max in signal_interpolation_fourier.py
-
-                        interpolated = interpolated.T
-                        interpolated = np.vstack([np.zeros_like(interpolated[0]), *interpolated]) # add r polarization back to trace, as zeroes
+                        timeseries = timeseries.T
+                        timeseries = np.vstack([np.zeros_like(timeseries[0]), *timeseries]) # add r polarization back to trace, as zeroes
                     efields[group_id] = self.cs.transform_from_onsky_to_ground(
-                        interpolated)
-                    # trace_start[group_id] = 0.
-                    # trace_start[group_id] = tstart
-                    trace_start[group_id] = pulse_toa_per_pol[0] * units.s - (interpolated.shape[1] / 2) * self.sampling_period # correct for trace centering
+                        timeseries)
+                    trace_start[group_id] = trace_start_time * units.s
 
 
                 sim_stat = make_sim_station(
