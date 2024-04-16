@@ -186,7 +186,7 @@ class readCoREASInterpolator:
                 for idx, (group_id, position) in enumerate(chan_positions_vxB_per_groupid_shifted.items()):
                     if not contained[idx]:
                         timeseries = np.zeros((3, self.signals.shape[-2]))
-                        trace_start_time = [self.signal_interpolator.interpolators_arrival_times(*position[:-1])]
+                        trace_start_time = self.signal_interpolator.interpolators_arrival_times(*position[:-1])
                     else:
                         timeseries, trace_start_time, _, _= self.signal_interpolator(
                             *position[:-1],
