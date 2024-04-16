@@ -58,9 +58,10 @@ class efieldInterferometricDepthReco:
         self._tab = None
         self._interpolation = None
         self._signal_kind = None
+        self._signal_threshold = None
         pass
 
-    def begin(self, interpolation=True, signal_kind="power", debug=False):
+    def begin(self, interpolation=True, signal_kind="power", debug=False, relative_signal_treshold: float = 0.):
         """
         Set module config.
 
@@ -77,10 +78,14 @@ class efieldInterferometricDepthReco:
 
         debug : bool
             If true, show some debug plots (Default: False).
+
+        relative_signal_treshold: float (default = 0.)
+           Fraction of strongest signal necessary for a trace to be used for RIT. Default of 0 includes all channels.
         """
         self._debug = debug
         self._interpolation = interpolation
         self._signal_kind = signal_kind
+        self._signal_threshold = relative_signal_treshold
 
         self._data = defaultdict(list)
         pass
@@ -272,8 +277,9 @@ class efieldInterferometricDepthReco:
                     break
 
         idx_max = np.argmax(signals_tmp)
-        depths_final = np.linspace(
-            depths[idx_max - 1], depths[idx_max + 1], 20)  # 10 g/cm2 bins
+        dtmp_max = depths[idx_max]
+
+        depths_final = np.linspace(dtmp_max - 30, dtmp_max + 30, 20) # 3 g/cm2 bins
         signals_final = self.sample_longitudinal_profile(
             traces, times, station_positions, shower_axis, core, depths=depths_final)
 
@@ -332,7 +338,7 @@ class efieldInterferometricDepthReco:
             mc_jitter: Optional[float] = None,
             upper_depth: float = 1000.,
             lower_depth: float = 400.,
-            geometry: Optional[tuple] = None
+            geometry: Optional[tuple] = None,
             ):
         """
         Run interferometric reconstruction of depth of coherent signal.
@@ -377,7 +383,7 @@ class efieldInterferometricDepthReco:
             core, shower_axis, cs = get_geometry_and_transformation(shower)
 
         traces_vxB, times, pos = get_station_data(
-            evt, det, cs, use_mc_pulses, station_ids=station_ids, mc_jitter=mc_jitter, n_sampling=256)
+            evt, det, cs, use_mc_pulses, station_ids=station_ids, mc_jitter=mc_jitter, n_sampling=256, signal_treshold=self._signal_threshold)
 
         def normal(x, A, x0, sigma):
             """ Gauss curve """
@@ -896,7 +902,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         core, shower_axis, cs = get_geometry_and_transformation(shower)
 
         traces_vxB, times, pos = get_station_data(
-            evt, det, cs, use_mc_pulses, station_ids=station_ids, mc_jitter=mc_jitter, n_sampling=256)
+            evt, det, cs, use_mc_pulses, station_ids=station_ids, mc_jitter=mc_jitter, n_sampling=256, signal_treshold=self._signal_threshold)
 
         direction_rec, core_rec = self.reconstruct_shower_axis(
             traces_vxB, times, pos, shower_axis, core, is_mc=True, magnetic_field_vector=shower[shp.magnetic_field_vector], depths = depths, initial_grid_spacing=initial_grid_spacing, cross_section_size=lateral_grid_size)
@@ -1061,7 +1067,7 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
             core, shower_axis, cs = get_geometry_and_transformation(shower)
 
         traces_vxB, times, pos = get_station_data(
-            evt, det, cs, use_mc_pulses, station_ids=station_ids, mc_jitter=mc_jitter, n_sampling=256)
+            evt, det, cs, use_mc_pulses, station_ids=station_ids, mc_jitter=mc_jitter, n_sampling=256, signal_treshold=self._signal_threshold)
 
         index, sigma_vxB, sigma_vxvxB = self.determine_lateral_shower_width(traces_vxB, times, pos, shower_axis, core, shower[shp.magnetic_field_vector], depth, initial_grid_spacing=initial_grid_spacing, cross_section_size=lateral_grid_size)
 
@@ -1103,7 +1109,7 @@ def get_geometry_and_transformation(shower):
     return core, shower_axis, cs
 
 
-def get_station_data(evt: Event, det: DetectorBase, cs: coordinatesystems.cstrafo, use_MC_pulses: bool, station_ids: Optional[list] = None, mc_jitter: Optional[float] = None, n_sampling: Optional[int]=None):
+def get_station_data(evt: Event, det: DetectorBase, cs: coordinatesystems.cstrafo, use_MC_pulses: bool, station_ids: Optional[list] = None, mc_jitter: Optional[float] = None, n_sampling: Optional[int]=None, signal_treshold: float = 0.):
     """
     Returns station data in a proper format
 
@@ -1127,6 +1133,9 @@ def get_station_data(evt: Event, det: DetectorBase, cs: coordinatesystems.cstraf
 
     n_sampling : int
         if not None clip trace with n_sampling // 2 around np.argmax(np.abs(trace))
+
+    signal_treshold: float (default: 0.)
+       Fraction of strongest signal necessary for a trace to be used for RIT. Default of 0 includes all channels.
 
     Returns
     -------
@@ -1178,13 +1187,32 @@ def get_station_data(evt: Event, det: DetectorBase, cs: coordinatesystems.cstraf
 
             traces_vxB.append(trace_vxB)
             times.append(time)
-            # break  # just take the first efield. TODO: Improve this
-
             pos.append(electric_field.get_position())
 
     traces_vxB = np.array(traces_vxB)
     times = np.array(times)
     pos = np.array(pos)
+
+    assert (0 <= signal_treshold <= 1)
+    if signal_treshold > 0:
+        flu = np.sum(traces_vxB ** 2, axis=-1)
+        mask = (flu >= signal_treshold * np.max(flu))
+        logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)}% of traces used for RIT with relative fluence above {signal_treshold}")
+
+        if False:
+            fig = plt.figure()
+            ax = fig.add_subplot()
+            import matplotlib as mpl
+            cmap = mpl.colormaps.get_cmap("viridis")
+            ax.scatter(*(pos[mask].T[:2,:]), c=flu[mask], cmap=cmap, s=1)
+            ax.scatter(*(pos[~mask].T[:2,:]), c="red", s=1, marker="x")
+            ax.set_aspect("equal")
+            plt.show()
+            sys.exit()
+
+        traces_vxB = traces_vxB[mask]
+        times = times[mask]
+        pos = pos[mask]
 
     return traces_vxB, times, pos
 
