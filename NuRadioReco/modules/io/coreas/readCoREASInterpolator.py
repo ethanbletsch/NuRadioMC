@@ -186,7 +186,7 @@ class readCoREASInterpolator:
                 for idx, (group_id, position) in enumerate(chan_positions_vxB_per_groupid_shifted.items()):
                     if not contained[idx]:
                         interpolated = np.zeros((3, self.signals.shape[-2]))
-                        pulse_toa_per_pol = [self.signal_interpolator.interpolators_arrival_times(*position[:-1])]
+                        pulse_toa_per_pol = self.signal_interpolator.interpolators_arrival_times(*position[:-1])
                     else:
                         interpolated, pulse_toa_per_pol = self.signal_interpolator(
                             *position[:-1],
