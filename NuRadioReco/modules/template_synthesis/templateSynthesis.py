@@ -225,6 +225,7 @@ class templateSynthesis:
         self.__zenith = None
         self.__azimuth = None
         self.__magnet = None
+        self.__core = None
 
     # Define zenith and azimuth as properties to protect them from getting written
     @property
@@ -298,8 +299,9 @@ class templateSynthesis:
         shower_long_profile = origin_shower.get_long_profile()
         shower_sampling_res = origin_shower.get_coreas_settings()['time_resolution']
 
-        # Save magnetic field from origin shower
+        # Save magnetic field and core from origin shower
         self.__magnet = origin_shower.magnet
+        self.__core = origin_shower.core
 
         length_saved = False
         for antenna in self.__antennas:
@@ -355,7 +357,8 @@ class templateSynthesis:
         for ind, antenna in enumerate(self.__antennas):
             # Antenna position in vvB
             antenna_vvB = transformer.transform_to_vxB_vxvxB(
-                np.array([-antenna.position[1], antenna.position[0], antenna.position[2]])
+                np.array([-antenna.position[1], antenna.position[0], antenna.position[2]]),
+                core=self.__core
             )
 
             # Sum all slices

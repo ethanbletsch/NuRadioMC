@@ -51,6 +51,7 @@ class slicedShower:
         self._trace_length = None
         self._GH_parameters = None
         self._magnetic_field = None
+        self._simulation_core = None
 
         self.ant_names = None
         self.nr_slices = None
@@ -66,6 +67,11 @@ class slicedShower:
         self._trace_length = len(file['CoREAS']['observers'][f'{next(iter(self.ant_names))}x{self.__slice_gram}'])
         self._GH_parameters = file['atmosphere'].attrs['Gaisser-Hillas-Fit']
         self._magnetic_field = np.array([0, file['inputs'].attrs['MAGNET'][0], -1 * file['inputs'].attrs['MAGNET'][1]])
+        self._simulation_core = np.array([
+            -1 * file['CoREAS'].attrs['CoreCoordinateWest'],
+            file['CoREAS'].attrs['CoreCoordinateNorth'],
+            file['CoREAS'].attrs['CoreCoordinateVertical']
+        ]) * units.cm
 
         file.close()
 
@@ -82,6 +88,11 @@ class slicedShower:
     @property
     def slice_grammage(self):
         return self.__slice_gram
+
+    @property
+    def core(self):
+        if self._simulation_core is not None:
+            return self._simulation_core
 
     def filter_trace(self, trace, f_min, f_max):
         trace_axis = -1  # based on self.get_trace()
@@ -126,7 +137,8 @@ class slicedShower:
 
         antenna_ground = file['CoREAS']['observers'][f'{ant_name}x{self.__slice_gram}'].attrs['position'] * units.cm
         antenna_vvB = transformer.transform_to_vxB_vxvxB(
-            np.array([-antenna_ground[1], antenna_ground[0], antenna_ground[2]])
+            np.array([-antenna_ground[1], antenna_ground[0], antenna_ground[2]]),
+            core=self.core
         )
 
         traces_geo = np.zeros((self.nr_slices, self._trace_length))
