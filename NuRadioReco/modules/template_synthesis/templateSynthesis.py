@@ -292,6 +292,7 @@ class templateSynthesis:
         # For later bookkeeping, let's save some variables from the file metadata
         self.__zenith = np.unique(spectral_file['Metadata']['Simulations metadata']['Zenith_deg'])[0] * units.deg
         self.__azimuth = np.unique(spectral_file['Metadata']['Simulations metadata']['Azimuth_deg'])[0] * units.deg
+        self.__azimuth -= 90 * units.deg  # rotate to radiotools coordinate system
 
         spectral_file.close()
 
@@ -354,6 +355,7 @@ class templateSynthesis:
         transformer = self.get_transformer()
 
         traces_ground = np.zeros_like(traces)
+        traces_ground_lin = np.zeros_like(traces)
         for ind, antenna in enumerate(self.__antennas):
             # Antenna position in vvB
             antenna_vvB = transformer.transform_to_vxB_vxvxB(
@@ -368,9 +370,9 @@ class templateSynthesis:
             # Save traces on ground
             for ind_slice in range(self.__n_slices):
                 traces_ground[ind, :, ind_slice, :] = transformer.transform_from_vxB_vxvxB(e_field[ind_slice].T)
-                traces_ground[ind, :, ind_slice, :] = transformer.transform_from_vxB_vxvxB(e_field_lin[ind_slice].T)
+                traces_ground_lin[ind, :, ind_slice, :] = transformer.transform_from_vxB_vxvxB(e_field_lin[ind_slice].T)
 
-        return traces_ground  # ANT x COREAS_POL x SLICES x SAMPLES
+        return traces_ground, traces_ground_lin  # ANT x COREAS_POL x SLICES x SAMPLES
 
     def end(self):
         pass
