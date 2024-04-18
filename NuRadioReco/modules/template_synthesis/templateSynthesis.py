@@ -141,6 +141,7 @@ class groundElementSynthesis:
         c_fit = np.polynomial.polynomial.polyval(x_max, self.spectral_coefficients[2])
 
         amp_fit = self._amplitude_function(a_fit, b_fit, c_fit, freq)
+        amp_fit[np.where(a_fit < 0)] = 0.0  # neg values of a, are points where a should be zero (not fitted)
         amp_fit[np.where(np.abs(amp_fit) <= 1e-20)] = 1.  # remove values which are too small and cause inf
 
         return amp_fit
