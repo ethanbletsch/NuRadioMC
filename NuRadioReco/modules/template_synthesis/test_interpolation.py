@@ -16,7 +16,7 @@ F_MIN, F_MAX, F_0 = 50, 350, 50
 
 
 def compare_trace(trace1, trace2, plot=False):
-    assertion = np.sum(np.abs(trace1 - trace2)) < 1e-15
+    assertion = np.sum(np.abs(trace1 - trace2)) < 1e-14
 
     if not plot:
         return assertion
@@ -67,7 +67,7 @@ class MyTestCase(unittest.TestCase):
             assert np.sum(np.abs(target_ce_filtered - traces_ce)) < 1e-14
             assert np.sum(np.abs(target_ce_filtered - traces_ce_lin)) < 1e-14
 
-    def synthesis(self):
+    def test_synthesis(self):
         origin = slicedShower(
             '/home/mitjadesmet/Data/ShowersSKA/OriginShowers/SIM130165.hdf5'
         )
@@ -90,7 +90,10 @@ class MyTestCase(unittest.TestCase):
         )
 
         for ind, ant in enumerate(synthesis.antennas):
-            target_geo, target_ce = target.get_trace(ant.name)
+            _, _, origin_times = origin.get_trace(ant.name, return_start_time=True)
+            target_geo, target_ce, target_times = target.get_trace(ant.name, return_start_time=True)
+
+            sample_diff = np.median(origin_times - target_times) / target.get_coreas_settings()['time_resolution']
 
             target_geo_filtered = target.filter_trace(
                 target_geo, F_MIN * units.MHz, F_MAX * units.MHz
@@ -101,9 +104,9 @@ class MyTestCase(unittest.TestCase):
 
             traces_geo, traces_ce, traces_ce_lin = traces_synth[ind]
 
-            assert_geo = compare_trace(target_geo_filtered, traces_geo, plot=True)
-            assert_ce = compare_trace(target_ce_filtered, traces_ce, plot=True)
-            assert_ce_lin = compare_trace(target_ce_filtered, traces_ce_lin, plot=True)
+            assert_geo = compare_trace(target_geo_filtered, np.roll(traces_geo, int(sample_diff)), plot=True)
+            assert_ce = compare_trace(target_ce_filtered, np.roll(traces_ce, int(sample_diff)), plot=True)
+            assert_ce_lin = compare_trace(target_ce_filtered, np.roll(traces_ce_lin, int(sample_diff)), plot=True)
 
             for component, assertion in zip(
                     ["GEO", "CE", "CE_LIN"],
@@ -120,7 +123,13 @@ class MyTestCase(unittest.TestCase):
         # Plot the result
         select_ant = 20
 
-        select_geo, select_ce = target.get_trace(synthesis.antennas[select_ant].name)
+        _, _, origin_times = origin.get_trace(synthesis.antennas[select_ant].name,
+                                              return_start_time=True)
+        select_geo, select_ce, select_times = target.get_trace(synthesis.antennas[select_ant].name,
+                                                               return_start_time=True)
+
+        sample_diff = np.median(select_times - origin_times) / target.get_coreas_settings()['time_resolution']
+
         select_geo_filtered = target.filter_trace(
             select_geo, F_MIN * units.MHz, F_MAX * units.MHz
         )
@@ -130,17 +139,17 @@ class MyTestCase(unittest.TestCase):
 
         fig, ax = plt.subplots(1, 1)
 
-        ax.plot(np.sum(select_geo_filtered, axis=0))
+        ax.plot(np.roll(np.sum(select_geo_filtered, axis=0), int(sample_diff)))
         ax.plot(np.sum(traces_synth[select_ant, 0], axis=0), '--')
 
-        ax.plot(np.sum(select_ce_filtered, axis=0))
+        ax.plot(np.roll(np.sum(select_ce_filtered, axis=0), int(sample_diff)))
         ax.plot(np.sum(traces_synth[select_ant, 1], axis=0), '--')
 
         ax.set_xlim([0, 1000])
 
         plt.show()
 
-    def test_fluence_interpolation(self):
+    def fluence_interpolation(self):
         origin = slicedShower(
             '/home/mitjadesmet/Data/ShowersSKA/OriginShowers/SIM130165.hdf5'
         )

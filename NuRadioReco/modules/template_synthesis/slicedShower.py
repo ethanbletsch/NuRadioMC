@@ -106,7 +106,7 @@ class slicedShower:
                     break
         return filter_trace(trace, self.get_coreas_settings()['time_resolution'], f_min, f_max, sample_axis=trace_axis)
 
-    def get_trace(self, ant_name):
+    def get_trace(self, ant_name, return_start_time=False):
         """
         Get the traces from all slices for a given antenna. The traces are converted to GEO/CE components.
 
@@ -114,6 +114,8 @@ class slicedShower:
         ----------
         ant_name : str
             The name of the antenna. Must be the same as the key in the HDF5!
+        return_start_time : bool, default=False
+            If True, an array containing the time of the first sample of each slice is returned
 
         Returns
         -------
@@ -121,6 +123,8 @@ class slicedShower:
             The geomagnetic traces, shaped as (slices, samples)
         traces_ce : ndarray
             The charge-excess traces, shaped as (slices, samples)
+        traces_start_times : ndarray (returned only if return_start_times is True)
+            The time of the first sample of each trace
         """
         if ant_name not in self.ant_names:
             raise ValueError(f"Antenna name {ant_name} is not present in shower")
@@ -143,11 +147,17 @@ class slicedShower:
 
         traces_geo = np.zeros((self.nr_slices, self._trace_length))
         traces_ce = np.zeros((self.nr_slices, self._trace_length))
+        traces_start_times = np.zeros((self.nr_slices,))
         for i_slice in range(self.nr_slices):
             g_slice = (i_slice + 1) * self.__slice_gram
 
-            trace_slice = file['CoREAS']['observers'][f'{ant_name}x{g_slice}'][:] * c_vacuum * 1e2  # samples x 4
-            trace_slice *= units.microvolt / units.m
+            trace_slice = file['CoREAS']['observers'][f'{ant_name}x{g_slice}'][:]  # samples x 4
+
+            # Save trace start time
+            traces_start_times[i_slice] = trace_slice[0, 0] * units.s
+
+            # Convert CGS to internal units
+            trace_slice *= c_vacuum * 1e2 * units.microvolt / units.m
 
             trace_slice_ground = np.array(
                 [-trace_slice[:, 2], trace_slice[:, 1], trace_slice[:, 3]]
@@ -159,6 +169,9 @@ class slicedShower:
             traces_ce[i_slice] = e_ce(trace_slice_vvB, *antenna_vvB[:2])
 
         file.close()
+
+        if return_start_time:
+            return traces_geo, traces_ce, traces_start_times
 
         return traces_geo, traces_ce
 
