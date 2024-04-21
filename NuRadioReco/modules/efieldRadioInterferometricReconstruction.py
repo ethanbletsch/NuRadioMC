@@ -14,6 +14,7 @@ from NuRadioReco.detector.detector_base import DetectorBase
 
 from collections import defaultdict
 import numpy as np
+from scipy import stats
 import sys
 import copy
 import matplotlib.pyplot as plt
@@ -439,9 +440,19 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
     """
     Class to reconstruct the shower axis with beamforming.
     """
-    def __init__(self):
+    def __init__(self, core_spread_scale: float = 100., angular_spread: float = np.radians(1)):
+        """
+        core_spread_scale: float (default: 100)
+            If is_mc==True, scale of spread of core incidence in showerplane in meters, from which an initial guess will be Gaussian sampled.
+
+        angular_spread: float (default = np.radians(1))
+            If is_mc==True, angular resolution in radians of random initial axis sampled close to mc shower axis. The direction is sampled from a Von Mises-Fisher distribution, with a concentration parameter of 1 / angular_spread**2 (This makes angular_spread the mode of the opening angle distribution)
+
+        """
         super().__init__()
         self.multiprocessing = False
+        self.core_spread_scale = core_spread_scale
+        self.angular_spread = angular_spread
 
 
     def find_maximum_in_plane(self, xs, ys, p_axis, station_positions, traces, times, cs: coordinatesystems.cstrafo):
@@ -720,7 +731,8 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             is_mc=True,
             depths: Optional[list] = None,
             initial_grid_spacing=60,
-            cross_section_size=1000):
+            cross_section_size=1000,
+            ):
         """
         Run interferometric reconstruction of the shower axis. Find the maxima of the interferometric signals
         within 2-d plane (slices) along a given axis (initial guess). Through those maxima (their position in the
@@ -763,13 +775,12 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
 
         if is_mc:
-            zenith_mc, azimuth_mc = hp.cartesian_to_spherical(*shower_axis)
-
-            # smeare mc axis.
-            zenith_inital = zenith_mc + np.deg2rad(np.random.normal(0, 0.5))
-            azimuth_inital = azimuth_mc + np.deg2rad(np.random.normal(0, 0.5))
-            shower_axis_inital = hp.spherical_to_cartesian(
-                zenith=zenith_inital, azimuth=azimuth_inital)
+            # smear mc axis
+            dist = vonmises_fisher()
+            shower_axis_inital = dist.rvs(shower_axis, 1 / self.angular_spread**2)
+            zenith_inital, azimuth_inital = hp.cartesian_to_spherical(*shower_axis_inital)
+            vxb_core = np.random.normal((0,0), scale=self.core_spread_scale)
+            core_inital = cs.transform_from_vxB_vxvxB_2D(vxb_core, core)
 
         else:
             shower_axis_inital = shower_axis
@@ -777,16 +788,12 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             zenith_inital, azimuth_inital = hp.cartesian_to_spherical(
                 *shower_axis)
 
-            shower_axis, core = None, None
+            # shower_axis, core = None, None
 
-            raise ValueError("is_mc=False is not yet properly implemented!")
+            # raise ValueError("is_mc=False is not yet properly implemented!")
 
         cs = coordinatesystems.cstrafo(
             zenith_inital, azimuth_inital, magnetic_field_vector=magnetic_field_vector)
-
-        if is_mc:
-            core_inital = cs.transform_from_vxB_vxvxB_2D(
-                np.array([np.random.normal(0, 100), np.random.normal(0, 100), 0]), core)
 
         if depths is None:
             depths = [500, 600, 700, 800, 900, 1000]
@@ -965,13 +972,12 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         """
 
         if is_mc:
-            zenith_mc, azimuth_mc = hp.cartesian_to_spherical(*shower_axis)
-
-            # smeare mc axis.
-            zenith_inital = zenith_mc + np.deg2rad(np.random.normal(0, 0.5))
-            azimuth_inital = azimuth_mc + np.deg2rad(np.random.normal(0, 0.5))
-            shower_axis_inital = hp.spherical_to_cartesian(
-                zenith=zenith_inital, azimuth=azimuth_inital)
+            # smear mc axis
+            dist = vonmises_fisher()
+            shower_axis_inital = dist.rvs(shower_axis, 1 / self.angular_spread**2)
+            zenith_inital, azimuth_inital = hp.cartesian_to_spherical(*shower_axis_inital)
+            core_vxB = np.random.normal((0,0), scale=self.core_spread_scale)
+            core_inital = cs.transform_from_vxB_vxvxB_2D(core_vxB, core)
 
         else:
             shower_axis_inital = shower_axis
@@ -979,15 +985,12 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
             zenith_inital, azimuth_inital = hp.cartesian_to_spherical(
                 *shower_axis)
 
-            shower_axis, core = None, None
+            # shower_axis, core = None, None
 
-            raise ValueError("is_mc=False is not yet properly implemented!")
+            # raise ValueError("is_mc=False is not yet properly implemented!")
 
         cs = coordinatesystems.cstrafo(
             zenith_inital, azimuth_inital, magnetic_field_vector=magnetic_field_vector)
-        if is_mc:
-            core_inital = cs.transform_from_vxB_vxvxB_2D(
-                np.array([np.random.normal(0, 100), np.random.normal(0, 100), 0]), core)
 
         deg_resolution = np.deg2rad(0.005)
 
@@ -1069,7 +1072,7 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         traces_vxB, times, pos = get_station_data(
             evt, det, cs, use_mc_pulses, station_ids=station_ids, mc_jitter=mc_jitter, n_sampling=256, signal_treshold=self._signal_threshold)
 
-        index, sigma_vxB, sigma_vxvxB = self.determine_lateral_shower_width(traces_vxB, times, pos, shower_axis, core, shower[shp.magnetic_field_vector], depth, initial_grid_spacing=initial_grid_spacing, cross_section_size=lateral_grid_size)
+        index, sigma_vxB, sigma_vxvxB = self.determine_lateral_shower_width(traces_vxB, times, pos, shower_axis, core, shower[shp.magnetic_field_vector], depth, initial_grid_spacing=initial_grid_spacing, cross_section_size=lateral_grid_size, is_mc=bool(geometry))
 
         shower.set_parameter(shp.interferometric_width_index, index)
         shower.set_parameter(shp.interferometric_width_vxB, sigma_vxB)
@@ -1280,3 +1283,107 @@ def gaussian_2d(xy, A, mux, muy, sigmax, sigmay):
     mu = np.array([mux, muy])
     sigma = np.array([sigmax, sigmay])
     return A*np.exp(np.sum(-np.square(xy - mu[:, np.newaxis] / (sigma[:, np.newaxis])) / 2, axis=0))
+
+class vonmises_fisher(stats._multivariate.multi_rv_generic):
+    """copy of scipy.stats.vonmises_fisher"""
+    def __init__(self, seed=None):
+        super().__init__(seed)
+
+    def _process_parameters(self, mu, kappa):
+        """
+        Infer dimensionality from mu and ensure that mu is a one-dimensional
+        unit vector and kappa positive.
+        """
+        mu = np.asarray(mu)
+        if mu.ndim > 1:
+            raise ValueError("'mu' must have one-dimensional shape.")
+        if not np.allclose(np.linalg.norm(mu), 1.):
+            raise ValueError("'mu' must be a unit vector of norm 1.")
+        if not mu.size > 1:
+            raise ValueError("'mu' must have at least two entries.")
+        kappa_error_msg = "'kappa' must be a positive scalar."
+        if not np.isscalar(kappa) or kappa < 0:
+            raise ValueError(kappa_error_msg)
+        if float(kappa) == 0.:
+            raise ValueError("For 'kappa=0' the von Mises-Fisher distribution "
+                             "becomes the uniform distribution on the sphere "
+                             "surface. Consider using "
+                             "'scipy.stats.uniform_direction' instead.")
+        dim = mu.size
+
+        return dim, mu, kappa
+
+    def _rvs_3d(self, kappa, size, random_state):
+        """
+        Generate samples from a von Mises-Fisher distribution
+        with mu = [1, 0, 0] and kappa. Samples then have to be
+        rotated towards the desired mean direction mu.
+        This method is much faster than the general rejection
+        sampling based algorithm.
+        Reference: https://www.mitsuba-renderer.org/~wenzel/files/vmf.pdf
+
+        """
+        if size is None:
+            sample_size = 1
+        else:
+            sample_size = size
+
+        # compute x coordinate acc. to equation from section 3.1
+        x = random_state.random(sample_size)
+        x = 1. + np.log(x + (1. - x) * np.exp(-2 * kappa))/kappa
+
+        # (y, z) are random 2D vectors that only have to be
+        # normalized accordingly. Then (x, y z) follow a VMF distribution
+        temp = np.sqrt(1. - np.square(x))
+        dist = stats.uniform_direction(2)
+        uniformcircle = dist.rvs(sample_size, random_state)
+        samples = np.stack([x, temp * uniformcircle[..., 0], temp * uniformcircle[..., 1]], axis=-1)
+        if size is None:
+            samples = np.squeeze(samples)
+        return samples
+
+    def _rotate_samples(self, samples, mu, dim):
+        """A QR decomposition is used to find the rotation that maps the
+        north pole (1, 0,...,0) to the vector mu. This rotation is then
+        applied to all samples.
+
+        Parameters
+        ----------
+        samples: array_like, shape = [..., n]
+        mu : array-like, shape=[n, ]
+            Point to parametrise the rotation.
+
+        Returns
+        -------
+        samples : rotated samples
+
+        """
+        base_point = np.zeros((dim, ))
+        base_point[0] = 1.
+        embedded = np.concatenate([mu[None, :], np.zeros((dim - 1, dim))])
+        rotmatrix, _ = np.linalg.qr(np.transpose(embedded))
+        if np.allclose(np.matmul(rotmatrix, base_point[:, None])[:, 0], mu):
+            rotsign = 1
+        else:
+            rotsign = -1
+
+        # apply rotation
+        samples = np.einsum('ij,...j->...i', rotmatrix, samples) * rotsign
+        return samples
+
+    def _rvs(self, dim, mu, kappa, size, random_state):
+        if dim == 3:
+            samples = self._rvs_3d(kappa, size, random_state)
+        else:
+            print("not implemented! update python to >= 3.9 and scipy to >= 1.11 and use scipy.stats.vonmises_fisher")
+
+        if dim != 2:
+            samples = self._rotate_samples(samples, mu, dim)
+        return samples
+
+    def rvs(self, mu=None, kappa=1, size=1, random_state=None):
+        dim, mu, kappa = self._process_parameters(mu, kappa)
+        random_state = self._get_random_state(random_state)
+        samples = self._rvs(dim, mu, kappa, size, random_state)
+        return samples
+
