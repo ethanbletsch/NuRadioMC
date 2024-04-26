@@ -1,6 +1,5 @@
 from NuRadioReco.modules.base.module import register_run
 from NuRadioReco.utilities import units, interferometry
-from NuRadioReco.framework.parameters import stationParameters as stnp
 from NuRadioReco.framework.parameters import showerParameters as shp
 
 from radiotools import helper as hp, coordinatesystems
@@ -11,14 +10,13 @@ from NuRadioReco.framework.event import Event
 from NuRadioReco.framework.station import Station
 from NuRadioReco.framework.base_shower import BaseShower
 from NuRadioReco.detector.detector_base import DetectorBase
-from NuRadioReco.utilities import units
 
-from collections import defaultdict
 import numpy as np
 from scipy import stats
 import sys
 import copy
 import matplotlib.pyplot as plt
+from matplotlib import gridspec, colorbar
 from scipy.optimize import curve_fit
 
 from typing import Optional
@@ -77,6 +75,7 @@ class efieldInterferometricDepthReco:
         self._zenith = None
         self._nsampling = None
         self._use_sim_pulses = None
+        self._data = {}
 
     def set_geometry(self, shower: BaseShower, core: Optional[np.ndarray] = None,
                      axis: Optional[np.ndarray] = None, smear_angle_radians: float = 0, smear_core_meter: float = 0):
@@ -91,8 +90,8 @@ class efieldInterferometricDepthReco:
                 shower[shp.zenith], shower[shp.azimuth])
 
         if smear_core_meter:
-            cs = coordinatesystems.cstrafo(hp.cartesian_to_spherical(
-                *axis), shower[shp.magnetic_field_vector])
+            cs = coordinatesystems.cstrafo(
+                *hp.cartesian_to_spherical(*axis), shower[shp.magnetic_field_vector])
             core_vxB = np.random.normal((0, 0), smear_core_meter)
             core = cs.transform_from_vxB_vxvxB_2D(core_vxB, core=core)
 
@@ -101,11 +100,12 @@ class efieldInterferometricDepthReco:
             dist = vonmises_fisher()
             axis = dist.rvs(axis, concentration_parameter)
 
-        self._core = core
-        self._axis = axis
+        self._core = core.reshape((3,))
+        self._axis = axis.reshape((3,))
         self._zenith = hp.get_angle(np.array([0, 0, 1]), self._axis)
         self._shower = shower
-        assert self._core[-1] == shower[shp.observation_level]
+        assert np.round(
+            self._core[-1], 8) == np.round(shower[shp.observation_level], 8)
         self._cs = coordinatesystems.cstrafo(
             *hp.cartesian_to_spherical(*self._axis), shower[shp.magnetic_field_vector])
 
@@ -140,7 +140,7 @@ class efieldInterferometricDepthReco:
         self.set_geometry(shower, core, axis)
         self.update_atmospheric_model_and_refractivity_table(shower)
 
-    def sample_longitudinal_profile(self):
+    def sample_longitudinal_profile(self, depths: np.ndarray):
         """
         Returns the longitudinal profile of the interferometic signal sampled along the shower axis.
 
@@ -177,9 +177,8 @@ class efieldInterferometricDepthReco:
             Interferometric singals sampled along the given axis
         """
 
-
-        signals = np.zeros(len(self._depths))
-        for idx, depth in enumerate(self._depths):
+        signals = np.zeros(len(depths))
+        for idx, depth in enumerate(depths):
             try:
                 # here z coordinate of core has to be the altitude of the
                 # observation_level
@@ -203,7 +202,8 @@ class efieldInterferometricDepthReco:
             # plt.plot(sum_trace)
             # plt.show()
 
-            signal = interferometry.get_signal(sum_trace, self._tstep, kind=self._signal_kind)
+            signal = interferometry.get_signal(
+                sum_trace, self._tstep, kind=self._signal_kind)
             signals[idx] = signal
 
         return signals
@@ -275,16 +275,14 @@ class efieldInterferometricDepthReco:
                 List of fitted Gauss parameters (amplitude, position, width)
 
         """
-
-        signals = self.sample_longitudinal_profile()
+        signals = self.sample_longitudinal_profile(self._depths)
 
         # if max signal is at the upper edge add points there
         if np.argmax(signals) == len(self._depths) - 1:
             while True:
                 depth_add = np.amax(self._depths) + self._binsize
-                signal_add = self.sample_longitudinal_profile(
-                    self._traces, self._times, self._positions, self._axis, self._core, depths=[depth_add])
-                self._depths = np.append(self._depths, depth_add)
+                signal_add = self.sample_longitudinal_profile([depth_add])
+                self._depths = np.hstack((self._depths, depth_add))
                 signals = np.append(signals, signal_add)
 
                 if not np.argmax(signals) == len(
@@ -295,9 +293,8 @@ class efieldInterferometricDepthReco:
         elif np.argmax(signals) == 0:
             while True:
                 depth_add = np.amin(self._depths) - self._binsize
-                signal_add = self.sample_longitudinal_profile(
-                    self._traces, self._times, self._positions, self._axis, self._core, depths=[depth_add])
-                self._depths = np.append(depth_add, self._depths)
+                signal_add = self.sample_longitudinal_profile([depth_add])
+                self._depths = np.hstack((depth_add, self. _depths))
                 signals = np.append(signal_add, signals)
 
                 if not np.argmax(signals) == 0 or depth_add <= 0:
@@ -310,8 +307,7 @@ class efieldInterferometricDepthReco:
             dtmp_max - 30,
             dtmp_max + 30,
             20)  # 3 g/cm2 bins
-        signals_fine = self.sample_longitudinal_profile(
-            self._traces, self._times, self._positions, self._axis, self._core, depths=depths_fine)
+        signals_fine = self.sample_longitudinal_profile(depths_fine)
 
         def normal(x, A, x0, sigma):
             """ Gauss curve """
@@ -323,7 +319,7 @@ class efieldInterferometricDepthReco:
         xrit = popt[1]
 
         if return_profile:
-            return self._depths, depths_fine, signals, signals_fine, popt
+            return depths_fine, signals, signals_fine, popt
 
         return xrit
 
@@ -370,46 +366,34 @@ class efieldInterferometricDepthReco:
         self._depths = depths / units.g * units.cm2
         self._binsize = self._depths[1] - self._depths[0]
         self._mc_jitter = mc_jitter / units.ns
-        
 
-        self.set_station_data(evt, self._use_sim_pulses, station_ids=station_ids)
-
+        self.set_station_data(evt, station_ids=station_ids)
 
         if not self._debug:
             xrit = self.reconstruct_interferometric_depth()
         else:
-            depths, depths_final, signals_tmp, signals_final, rit_parameters = \
+            depths_final, signals_tmp, signals_final, rit_parameters = \
                 self.reconstruct_interferometric_depth(return_profile=True)
             xrit = rit_parameters[1]
-            ax = plt.figure().add_subpot()
-            ax.scatter(depths, signals_tmp, color="blue", label="signals_tmp", s=2, zorder=1.1)
-            ax.scatter(depths_final, signals_final, color="red", label="signals_final", s=2, zorder=1)
-            ax.plot(depths_final, normal(depths_final, *rit_parameters), label="gauss fit", color="black", ls="--")
+            ax = plt.figure().add_subplot()
+            ax.scatter(self._depths, signals_tmp, color="blue",
+                       label="signals_tmp", s=2, zorder=1.1)
+            ax.scatter(depths_final, signals_final, color="red",
+                       label="signals_final", s=2, zorder=1)
+            ax.plot(depths_final, normal(depths_final, *rit_parameters),
+                    label="gauss fit", color="black", ls="--")
             ax.axvline(rit_parameters[1])
             ax.set_xlabel("slant depth [g/cm2]")
             ax.set_ylabel(self._signal_kind)
             ax.legend()
             plt.show()
-        
+
         self._shower.set_parameter(
             shp.interferometric_shower_maximum,
             xrit * units.g / units.cm2)
 
-
     def end(self):
-        """
-        Plot reconstructed depth vs true depth of shower maximum (Xmax).
-        """
-
-        if self._debug:
-            fig, ax = plt.subplots(1)
-            sct = ax.scatter(self._shower[shp.shower_maximum] / units.g * units.cm2, self._shower[shp.interferometric_shower_maximum], s=200, c=np.rad2deg(self._shower[shp.zenith]))
-            cbi = plt.colorbar(sct, pad=0.02)
-            cbi.set_label("zenith angle / deg")
-            ax.set_xlabel(r"$X_\mathrm{max}$ / g$\,$cm$^{-2}$")
-            ax.set_ylabel(r"$X_\mathrm{RIT}$ / g$\,$cm$^{-2}$")
-            fig.tight_layout()
-            plt.show()
+        pass
 
     def update_atmospheric_model_and_refractivity_table(
             self, shower: BaseShower):
@@ -440,7 +424,6 @@ class efieldInterferometricDepthReco:
         elif self._tab._refractivity_at_sea_level != shower[shp.refractive_index_at_ground] - 1:
             self._tab = refractivity.RefractivityTable(
                 self._at.model, refractivity_at_sea_level=shower[shp.refractive_index_at_ground] - 1, curved=curved)
-
 
     def set_station_data(self, evt: Event, station_ids: Optional[list] = None):
         """
@@ -483,7 +466,7 @@ class efieldInterferometricDepthReco:
             Positions for all stations/observers.
         """
 
-        traces_vxB = []
+        traces = []
         times = []
         pos = []
         if station_ids is None:
@@ -496,69 +479,83 @@ class efieldInterferometricDepthReco:
 
             electric_field: ElectricField
             for electric_field in station.get_electric_fields():
-                traces = self._cs.transform_to_vxB_vxvxB(electric_field.get_trace())
-                trace_vxB = traces[0]
+                trace_vector = self._cs.transform_to_vxB_vxvxB(
+                    electric_field.get_trace())
+                # trace = np.linalg.norm(trace_vector, axis=0)
+                trace = trace_vector[0]
                 time = copy.copy(electric_field.get_times())
 
                 if self._use_sim_pulses and self._mc_jitter > 0:
                     time += np.random.normal(scale=self._mc_jitter)
                 if self._nsampling is not None:
                     hw = self._nsampling // 2
-                    m = np.argmax(np.abs(trace_vxB))
+                    m = np.argmax(np.abs(trace))
 
                     if m < hw:
                         m = hw
-                    if m > len(trace_vxB) - hw:
-                        m = len(trace_vxB) - hw
+                    if m > len(trace) - hw:
+                        m = len(trace) - hw
 
-                    trace_vxB = trace_vxB[m - hw:m + hw]
+                    trace = trace[m - hw:m + hw]
                     time = time[m - hw:m + hw]
 
-                traces_vxB.append(trace_vxB)
+                traces.append(trace)
                 times.append(time)
                 pos.append(electric_field.get_position())
 
-        traces_vxB = np.array(traces_vxB)
+        traces = np.array(traces)
         times = np.array(times)
         pos = np.array(pos)
 
         if self._signal_threshold > 0:
-            flu = np.sum(traces_vxB ** 2, axis=-1)
+            flu = np.sum(traces ** 2, axis=-1)
             mask = (flu >= self._signal_threshold * np.max(flu))
-            logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)}% of traces used for RIT with relative fluence above {self._signal_threshold}")
+            logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)
+                        }% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
 
             if self._debug:
                 ax = plt.figure().add_subplot()
                 import matplotlib as mpl
                 cmap = mpl.colormaps.get_cmap("viridis")
                 ax.scatter(*(pos[mask].T[:2, :]), c=flu[mask], cmap=cmap, s=1)
-                ax.scatter(*(pos[~mask].T[:2, :]), c="red", s=1, marker="x", label="excluded")
+                ax.scatter(*(pos[~mask].T[:2, :]), c="red",
+                           s=1, marker="x", label="excluded")
                 ax.set_aspect("equal")
                 ax.legend()
                 plt.show()
-                sys.exit()
 
-            traces_vxB = traces_vxB[mask]
+            traces = traces[mask]
             times = times[mask]
             pos = pos[mask]
 
-        self._traces = traces_vxB
+        self._traces = traces
         self._times = times
+        self._tstep = self._times[0, 1] - self._times[0, 0]
         self._positions = pos
+
+        if self._use_sim_pulses:
+            cs_shower = coordinatesystems.cstrafo(self._shower[shp.zenith], self._shower[shp.azimuth], magnetic_field_vector=self._shower[shp.magnetic_field_vector])
+            logger.debug(f"self._positions shape: {self._positions.shape}")
+            pos_showerplane = cs_shower.transform_to_vxB_vxvxB(self._positions, core=self._shower[shp.core])
+            if self._debug:
+                ax = plt.figure().add_subplot()
+                ax.scatter(pos_showerplane[:,0], pos_showerplane[:,1], s=1, c=flu[mask])
+                ax.set_xlabel("vxB [m]")
+                ax.set_ylabel("vxvxB [m]")
+                ax.set_aspect("equal")
+                ax.set_title("positions in showerplane")
+                plt.show()
+            max_vxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:,0]))
+            max_vxvxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:,1]))
+            self._data["max_vxB_baseline"] = max_vxB_baseline_proxy * units.m
+            self._data["max_vxvxB_baseline"] = max_vxvxB_baseline_proxy * units.m
 
 class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
     """
     Class to reconstruct the shower axis with beamforming.
     """
+
     def __init__(self):
-        """
-        core_spread_scale: float (default: 100)
-            If is_mc==True, scale of spread of core incidence in showerplane in meters, from which an initial guess will be Gaussian sampled.
-
-        angular_spread: float (default = np.radians(1))
-            If is_mc==True, angular resolution in radians of random initial axis sampled close to mc shower axis. The direction is sampled from a Von Mises-Fisher distribution, with a concentration parameter of 1 / angular_spread**2 (This makes angular_spread the mode of the opening angle distribution)
-
-        """
         super().__init__()
         self._multiprocessing = None
 
@@ -572,6 +569,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
               sample_angular_resolution: float = 0.005*units.deg,
               initial_grid_spacing: float = 60*units.m,
               cross_section_width: float = 1000*units.m,
+              refine_axis: bool = False,
               debug: bool = False
               ):
         """
@@ -598,6 +596,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
         """
         self._debug = debug
+        self._refine_axis = refine_axis
         self._nsampling = n_sampling
         self._use_sim_pulses = use_sim_pulses
         self._multiprocessing = multiprocessing
@@ -605,10 +604,11 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         self._initial_grid_spacing = initial_grid_spacing / units.m
         self._cross_section_width = cross_section_width / units.m
 
-        self.set_geometry(shower, core=None, axis=None, smear_angle_radians=axis_spread / units.radian, smear_core_meter=core_spread / units.m)
+        self.set_geometry(shower, core=None, axis=None, smear_angle_radians=axis_spread /
+                          units.radian, smear_core_meter=core_spread / units.m)
         self.update_atmospheric_model_and_refractivity_table(shower)
 
-    def find_maximum_in_plane(self, xs_showerplane, ys_showerplane, p_axis):
+    def find_maximum_in_plane(self, xs_showerplane, ys_showerplane, p_axis, cs):
         """
         Sample interferometric signals in 2-d plane (vxB-vxvxB) perpendicular to a given axis on a rectangular/quadratic grid.
         The orientation of the plane is defined by the radiotools.coordinatesytem.cstrafo argument.
@@ -650,22 +650,25 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         # for xdx, x in enumerate(tqdm(xs)):
             signals = np.zeros(len(ys_showerplane))
             for ydx, y in enumerate(ys_showerplane):
-                p = p_axis + self._cs.transform_from_vxB_vxvxB(np.array([x, y, 0]))
+                p = p_axis + cs.transform_from_vxB_vxvxB(np.array([x, y, 0]))
 
                 sum_trace = interferometry.interfere_traces_interpolation(
                     p, self._positions, self._traces, self._times, tab=self._tab)
 
-                if self._debug and not self._multiprocessing:
+                if False:
                     from scipy.signal import hilbert
                     fig = plt.figure()
                     ax = fig.add_subplot()
-                    # ax.plot(sum_trace, color="r", label="sum_trace")
-                    ax.plot((np.abs(sum_trace) - np.abs(hilbert(sum_trace))) / np.abs(sum_trace), color="b", label="|sum_trace| - |hilbert|")
+                    ax.plot(np.abs(sum_trace), color="r", label="sum_trace")
+                    ax.plot(np.abs(hilbert(sum_trace)), color="b",
+                            label="hilbert(trace)", ls="--")
+                    # ax.plot((np.abs(sum_trace) - np.abs(hilbert(sum_trace))), color="k", label="|sum_trace| - |hilbert|")
                     ax.legend()
                     plt.show()
-                    sys.exit("plotted")
+                    sys.exit()
 
-                signal = interferometry.get_signal(sum_trace, self._tstep, kind=self._signal_kind)
+                signal = interferometry.get_signal(
+                    sum_trace, self._tstep, kind=self._signal_kind)
                 signals[ydx] = signal
             return signals
 
@@ -680,116 +683,60 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
         if not self._multiprocessing:
             signals = []
-            for xdx,x in enumerate(xs_showerplane):
+            for xdx, x in enumerate(xs_showerplane):
                 signals.append(yiteration(xdx, x))
         signals = np.vstack(signals)
         idx = np.argmax(signals)
         return idx, signals
 
     def sample_lateral_cross_section(
-            self, depth: float, fit_lateral: bool = False):
-        """
-        Sampling the "cross section", i.e., 2d-lateral distribution of the beam formed signal for a slice in the atmosphere.
-        It is looking for the maximum in the lateral distribution with an (stupid) iterative grid search.
+            self, depth: float, core: np.ndarray, axis: np.ndarray, cross_section_width: float, initial_grid_spacing: float, fit_lateral: bool = False):
 
-        Returns the position and the strenght of the maximum signal.
-
-        Parameters
-        ----------
-
-        traces : array(number_of_antennas, samples)
-            Electric field traces (one polarisation of it, usually vxB) for all antennas/stations.
-
-        times : array(number_of_antennas, samples)
-            Time vectors corresponding to the electric field traces.
-
-        station_positions : array(number_of_antennas, 3)
-            Position of each antenna.
-
-        shower_axis_inital : array(3,)
-            Axis/direction which is used as initial guess for the true shower axis.
-            Around this axis the interferometric signals are sample on 2-d planes.
-
-        core : array(3,)
-            Shower core which is used as initial guess. Keep in mind that the altitudes (z-coordinate) matters.
-
-        depth : np.array
-
-        cs : radiotools.coordinatesytem.cstrafo
-
-        shower_axis_mc : np.array(3,)
-
-        core_mc : np.array(3,)
-
-        relative : bool (Default: False)
-            If True, the size of the search grid is relative to the distance between the MC axis and the inital guess axis.
-            The search grid will by a 20 x 20 and just include the MC axis. It is made sure that the MC axis is not at a
-            grid point. If False, see `centered_around_truth`.
-
-        initial_grid_spacing : double
-            Initial spacing of your grid points in meters. (Default: 60m)
-
-        centered_around_truth : bool (Default: True)
-            Only used when `relative == False`. If True, the search grid will be constructed around the MC axis. The size
-            and spacing between grid points is determined by `cross_section_size` and `initial_grid_spacing`. If False,
-            the search grid is constructed around the inital guess axis. It ensured that the MC-axis is within the search grid.
-            that means the grid size might be abitrary large (which makes the reconstruction very slow) if the inital axis is far off
-            the MC axis.
-
-        cross_section_size : float
-            (Only used when `centered_around_truth == True`.) Side length on the 2-d planes (slice) along which the maximum around
-            the initial axis is sampled in meters. (Default: 1000m)
-
-        deg_resolution : float
-            Target spacing for the grid spacing in terms of opening angle. Unit is radiants.
-            Defines the stopping condition for the iterations. (Default: np.deg2rad(0.005))
-
-        Returns
-        -------
-
-        point_found : np.array(3,)
-            Position of the found maximum
-
-        weight : float
-            Amplitude/Strengt of the maximum
-
-        """
+        zenith, azimuth = hp.cartesian_to_spherical(*axis)
+        cs = coordinatesystems.cstrafo(
+            zenith, azimuth, magnetic_field_vector=self._shower[shp.magnetic_field_vector])
 
         dist = self._at.get_distance_xmax_geometric(
-            self._zenith, depth, observation_level=self._core[-1])
+            zenith, depth, observation_level=core[-1])
         dr_ref_target = np.tan(self._angres) * dist
-        p_axis = self._axis * dist + self._core
+        p_axis = axis * dist + core
 
-        max_dist = self._cross_section_width / 2 + self._initial_grid_spacing
+        max_dist = cross_section_width / 2 + initial_grid_spacing
 
         if self._use_sim_pulses:
             # we use the true core to make sure that it is within the inital search gri
-            shower_axis = hp.spherical_to_cartesian(self._shower[shp.zenith], self._shower[shp.azimuth])
+            shower_axis = hp.spherical_to_cartesian(
+                self._shower[shp.zenith], self._shower[shp.azimuth])
             mc_at_plane = interferometry.get_intersection_between_line_and_plane(
-                self._axis, p_axis, shower_axis, self._shower[shp.core])
+                axis, p_axis, shower_axis, self._shower[shp.core])
             # gives interserction between a plane normal to the shower axis initial guess (shower_axis_inital)
             # anchored at a point in this vB plane at the requested height/depth along the initial axis (p_axis),
             # with the true/montecarlo shower axis anchored at the true/mc core
-            cs_shower = coordinatesystems.cstrafo(self._shower[shp.zenith], self._shower[shp.azimuth], self._shower[shp.magnetic_field_vector])
-            mc_vB = cs_shower.transform_to_vxB_vxvxB(mc_at_plane, core=p_axis) # could instead use p_axis if no mc available?
-            
+            cs_shower = coordinatesystems.cstrafo(
+                self._shower[shp.zenith], self._shower[shp.azimuth], self._shower[shp.magnetic_field_vector])
+            # could instead use p_axis if no mc available?
+            mc_vB = cs_shower.transform_to_vxB_vxvxB(mc_at_plane, core=p_axis)
+
             max_mc_vB_coordinate = np.max(np.abs(mc_vB))
             if max_dist < max_mc_vB_coordinate:
-                logger.warn(f"MC axis does not intersect plane to be sampled around p_axis at {depth} g/cm2!",
-                            "Extending the plane to include MC axis",
+                logger.warn(f"MC axis does not intersect plane to be sampled around p_axis at {depth} g/cm2! " + \
+                            "Extending the plane to include MC axis. " + \
                             f"Consider increasing cross section size by at least a factor {max_mc_vB_coordinate / max_dist}, since this warning will not appear for real data;)")
-                max_dist = np.max(np.abs(mc_vB)) + self._initial_grid_spacing
+                max_dist = np.max(np.abs(mc_vB)) + initial_grid_spacing
 
-
-        xlims = np.array([-max_dist, max_dist]) + np.random.uniform(-0.1 * self._initial_grid_spacing, 0.1 * self._initial_grid_spacing, 2)
-        ylims = np.array([-max_dist, max_dist]) + np.random.uniform(-0.1 * self._initial_grid_spacing, 0.1 * self._initial_grid_spacing, 2)
-        xs = np.arange(xlims[0], xlims[1] + self._initial_grid_spacing, self._initial_grid_spacing)
-        ys = np.arange(ylims[0], ylims[1] + self._initial_grid_spacing, self._initial_grid_spacing)
+        xlims = np.array([-max_dist, max_dist]) + np.random.uniform(-0.1 *
+                         initial_grid_spacing, 0.1 * initial_grid_spacing, 2)
+        ylims = np.array([-max_dist, max_dist]) + np.random.uniform(-0.1 *
+                         initial_grid_spacing, 0.1 * initial_grid_spacing, 2)
+        xs = np.arange(xlims[0], xlims[1] +
+                       initial_grid_spacing, initial_grid_spacing)
+        ys = np.arange(ylims[0], ylims[1] +
+                       initial_grid_spacing, initial_grid_spacing)
 
         iloop = 0
-        xh, yh, sh = [], [], [] # history
+        xh, yh, sh = [], [], []  # history
         while True:
-            idx, signals = self.find_maximum_in_plane(xs, ys, p_axis)
+            idx, signals = self.find_maximum_in_plane(xs, ys, p_axis, cs)
 
             xh.append(xs)
             yh.append(ys)
@@ -799,9 +746,6 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                 plot_lateral_cross_section(
                     xs, ys, signals, mc_vB, title=r"%.1f$\,$g$\,$cm$^{-2}$" % depth)
             iloop += 1
-            dr = np.sqrt((xs[1] - xs[0]) ** 2 + (ys[1] - ys[0]) ** 2)
-            if iloop == 10 or dr < dr_ref_target:
-                break
 
             # maximum
             x_max = xs[int(idx // len(ys))]
@@ -810,20 +754,24 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             # update range / grid
             dx = xs[1] - xs[0]
             dy = ys[1] - ys[0]
+
+            dr = np.sqrt(dx ** 2 + dy ** 2)
+            if iloop == 10 or dr < dr_ref_target:
+                break
+
             if iloop >= 2:
                 dx /= 2
                 dy /= 2
             xs = np.linspace(x_max - dx, x_max + dx, 5)
             ys = np.linspace(y_max - dy, y_max + dy, 5)
 
-
-
         weight = np.amax(signals)
 
         xfound = xs[int(idx // len(ys))]
         yfound = ys[int(idx % len(ys))]
 
-        point_found = p_axis + self._cs.transform_from_vxB_vxvxB(np.array([xfound, yfound, 0]))
+        point_found = p_axis + \
+            cs.transform_from_vxB_vxvxB(np.array([xfound, yfound, 0]))
 
         if fit_lateral:
             def lorentzian_2d(xy, alpha, lx, ly):
@@ -838,7 +786,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             xy = (np.hstack(xconcat), np.hstack(yconcat))
             sh = np.concatenate([s.flatten() for s in sh[iterlim:]])
             fitfunc = lorentzian_2d
-            p, pcov = curve_fit(fitfunc, xy, sh, p0=[1,1,1])
+            p, pcov = curve_fit(fitfunc, xy, sh, p0=[1, 1, 1])
             if self._debug:
                 ax = plt.figure().add_subplot()
                 sm = ax.scatter(*xy, c=sh - fitfunc(xy, *p))
@@ -846,7 +794,8 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                 plt.show()
             return point_found, weight, p, np.diag(pcov)
 
-        return point_found, weight
+        ground_grid_uncertainty = cs.transform_from_vxB_vxvxB_2D(np.array([dx,dy])/np.sqrt(12))
+        return point_found, weight, ground_grid_uncertainty
 
     def reconstruct_shower_axis(self):
         """
@@ -889,14 +838,16 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
         """
 
-
         found_points = []
+        sigma_points = []
         weights = []
 
         for depth in tqdm(self._depths):
-            found_point, weight = self.sample_lateral_cross_section(depth)
+            found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
+                depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
 
             found_points.append(found_point)
+            sigma_points.append(ground_grid_uncertainty)
             weights.append(weight)
 
         # extend to new depths if max is found at edges of self._depths
@@ -905,13 +856,14 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             if np.argmax(weights) != 0 or counter >= 10:
                 break
 
-            new_depth = depths[0] - (depths[1] - depths[0])
+            new_depth = self._depths[0] - self._binsize
             logger.info("extend to", new_depth)
-            found_point, weight = self.sample_lateral_cross_section(new_depth)
+            found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(new_depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
 
-            depths = [new_depth] + depths
+            self._depths = np.hstack(([new_depth], self._depths))
             found_points = [found_point] + found_points
             weights = [weight] + weights
+            sigma_points = [np.array(ground_grid_uncertainty)] + sigma_points
             counter += 1
 
         counter = 0
@@ -919,24 +871,66 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             if np.argmax(weights) != len(weights) or counter >= 10:
                 break
 
-            new_depth = depths[-1] + (depths[1] - depths[0])
+            new_depth = self._depths[-1] + self._binsize
             logger.info("extend to", new_depth)
-            found_point, weight = self.sample_lateral_cross_section(new_depth)
+            found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(new_depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
 
-            depths.append(new_depth)
+            self._depths = np.hstack((self._depths, [new_depth]))
             found_points.append(found_point)
             weights.append(weight)
+            sigma_points.append(ground_grid_uncertainty)
             counter += 1
 
-        found_points = np.array(found_points)
-        weights = np.array(weights)
+        direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(
+            found_points, sigma_points, self._axis, full_output=True)
+        logger.info(f"core: {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
 
-        popt, _ = curve_fit(interferometry.fit_axis, found_points[:, -1], found_points.flatten(),
-                            sigma=np.amax(weights) / np.repeat(weights, 3), p0=[*hp.cartesian_to_spherical(self._axis), 0, 0])
+        if self._use_sim_pulses:
+            logger.info(f"Opening angle with MC: {np.round(opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
+
+
+        #add smaller planes sampled along inital rit axis to increase amount of points to fit final rit axis
+        if self._refine_axis:
+            refinement = 4
+            depths2 = np.linspace(self._depths[0], self._depths[-1], refinement*len(self._depths))
+            for depth in tqdm([d for d in depths2 if d not in self._depths]):
+                found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(depth, core_rec, direction_rec, self._cross_section_width / 4, self._cross_section_width / 20)
+                found_points.append(found_point)
+                weights.append(weight)
+                sigma_points.append(ground_grid_uncertainty)
+
+            direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(found_points, sigma_points, direction_rec, full_output=True)
+            logger.info(f"core (refined): {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
+
+        if self._use_sim_pulses and self._refine_axis:
+            logger.info(f"Opening angle with MC (refined): {np.round(opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
+        if self._use_sim_pulses and self._refine_axis and self._debug:
+            plot_shower_axis_points(np.array(found_points), np.array(weights), self._shower)
+
+        self._data["core"] = {"opt": core_rec * units.m, "std": core_std * units.m}
+        self._data["opening_angle_mc"] = {"opt": opening_angle_sph * units.rad, "std": opening_angle_sph_std * units.rad}
+        self._data["found_points"] = np.array(found_points)
+        self._data["weights"] = np.array(weights)
+        return direction_rec, core_rec
+
+    def fit_axis(self, points, sigma_points, axis0, full_output: bool = False):
+        points = np.array(points)
+        sigma_points = np.array(sigma_points)
+
+        popt, pcov = curve_fit(interferometry.fit_axis, points[:, -1], points.flatten(),
+                            sigma=sigma_points.flatten(), p0=[*hp.cartesian_to_spherical(*axis0), 0, 0], absolute_sigma=True)
+        # popt, pcov = curve_fit(interferometry.fit_axis, points[:, -1], points.flatten(),
+        #                     sigma=np.amax(weights) / np.repeat(weights, 3), p0=[*hp.cartesian_to_spherical(*axis0), 0, 0])
         direction_rec = hp.spherical_to_cartesian(*popt[:2])
         core_rec = interferometry.fit_axis(np.array([self._core[-1]]), *popt)
+        if not full_output:
+            return direction_rec, core_rec
 
-        return direction_rec, core_rec
+        thetavar, phivar, corex_var, corey_var = np.diag(pcov)
+        opening_angle, opening_angle_var = opening_angle_spherical(*hp.cartesian_to_spherical(*direction_rec), self._shower[shp.zenith], self._shower[shp.azimuth], thetavar, phivar)
+
+        return direction_rec, core_rec, opening_angle, np.sqrt(opening_angle_var), np.sqrt([corex_var, corey_var])
+
 
     @register_run()
     def run(self,
@@ -944,7 +938,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             det: Optional[DetectorBase] = None,
             station_ids: Optional[list] = None, signal_kind="power",
             relative_signal_treshold: float = 0.,
-            depths: np.ndarray = np.arange(400, 800, 10) * units.g / units.cm2,
+            depths: np.ndarray = np.arange(400, 900, 100) * units.g / units.cm2,
             mc_jitter: float = 0 * units.ns,
             ):
         """
@@ -993,7 +987,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         self._shower.set_parameter(shp.interferometric_core, core_rec)
 
     def end(self):
-        pass
+        return self._data
 
 class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
     def __init__(self):
@@ -1038,7 +1032,7 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
 
         """
 
-        found_point, weight, p, pvar = self.sample_lateral_cross_section(depth, fit_lateral=True)
+        found_point, weight, p, pvar = self.sample_lateral_cross_section(depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing, fit_lateral=True)
         logger.info(f"index of lorentzian RIT profile {p[0]} +- {np.sqrt(pvar[0])}")
         logger.info(f"vxB width of vxB RIT profile {p[1]} +- {np.sqrt(pvar[1])}")
         logger.info(f"vxvxB width of vxB RIT profile {p[2]} +- {np.sqrt(pvar[2])}")
@@ -1087,9 +1081,9 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         self._signal_threshold = relative_signal_treshold
 
         self._mc_jitter = mc_jitter / units.ns
-        
 
-        self.set_station_data(evt, self._use_sim_pulses, station_ids=station_ids)
+
+        self.set_station_data(evt, station_ids=station_ids)
 
         index, sigma_vxB, sigma_vxvxB = self.determine_lateral_shower_width(self._shower[shp.interferometric_shower_maximum / units.g * units.cm2])
         self._shower.set_parameter(shp.interferometric_width_index, index)
@@ -1099,6 +1093,38 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
     def end(self):
         pass
 
+
+def plot_shower_axis_points(found_points: np.ndarray, weights: np.ndarray, shower: BaseShower, points_delta: Optional[np.ndarray] = None):
+    fig = plt.figure()
+    gs = gridspec.GridSpec(2,2,figure=fig, height_ratios=[1,15], hspace=0.1)
+    cs = coordinatesystems.cstrafo(shower[shp.zenith], shower[shp.azimuth], shower[shp.magnetic_field_vector])
+    found_points_showerplane = cs.transform_to_vxB_vxvxB(found_points, shower[shp.core])
+    x,y,z = found_points_showerplane.T
+    z *= -1
+    ax_z = fig.add_subplot(gs[1,0])
+    ax_w = fig.add_subplot(gs[1,1])
+    sm_z = ax_z.scatter(x,y, c=z, cmap=plt.cm.viridis, marker="v")
+    if points_delta is not None:
+        delta_showerplane = cs.transform_to_vxB_vxvxB(points_delta)
+        dx, dy, dz = delta_showerplane.T
+        ax_z.errorbar(x,y,dy,dx,capsize=.2, zorder=.99)
+    # ax_z.plot(x,y,lw=.1, ls="--", color="k")
+    colorbar.Colorbar(ax=fig.add_subplot(gs[0,0]), orientation="horizontal", label="RIT -v [m]", ticklocation="top", mappable=sm_z)
+    ax_z.set_xlabel("RIT vxB [m]")
+    ax_z.set_ylabel("RIT vxvxB [m]")
+
+    sm_w = ax_w.scatter(x,z, c=y, cmap=plt.cm.plasma, marker="v")
+    # ax_w.plot(x,z,color="k", ls="--", lw=.1)
+    if points_delta is not None:
+        ax_w.errorbar(x,z,dz,dx, capsize=.2, zorder=.99)
+    colorbar.Colorbar(ax=fig.add_subplot(gs[0,1]), orientation="horizontal", label="RIT vxvxB [m]", ticklocation="top", mappable=sm_w)
+    ax_w.set_xlabel("RIT vxB [m]")
+    ax_w.set_ylabel("RIT -v [m]")
+    for ax in [ax_z, ax_w]:
+        ax.spines[["top","right"]].set_visible(True)
+        ax.grid(visible=True, lw=.2)
+    plt.tight_layout()
+    plt.show()
 
 def plot_lateral_cross_section(
         xs, ys, signals, mc_pos=None, fname=None, title=None):
@@ -1275,3 +1301,26 @@ class vonmises_fisher(stats._multivariate.multi_rv_generic):
         random_state = self._get_random_state(random_state)
         samples = self._rvs(dim, mu, kappa, size, random_state)
         return samples
+
+
+def angle_between(v1: np.ndarray, v2: np.ndarray):
+    """
+    Returns the angle in radians between vectors 'v1' and 'v2': https://stackoverflow.com/a/13849249
+    """
+    v1_u = v1 / np.linalg.norm(v1, axis=0)
+    v2_u = v2 / np.linalg.norm(v2, axis=0)
+    return np.arccos(v1_u @ v2_u)
+
+def opening_angle_spherical(theta1, phi1, theta2, phi2, theta1_var, phi1_var):
+    """Give the the opening angle and variance on the opening angle between two vectors with spherical coordinates (1, theta, phi), asuming the second vector is known, such that theta2_var, phi2_var are not asked"""
+    c1 = np.cos(theta1)
+    c2 = np.cos(theta2)
+    s1 = np.sin(theta1)
+    s2 = np.sin(theta2)
+    s12 = np.sin(phi1 - phi2)
+    c12 = np.cos(phi1 - phi2)
+    arg = s1*s2*c12 + c1*c2
+    opening_angle_opt = np.arccos(arg)
+    opening_angle_var = (1/(1-arg**2)) * ((c1*s2*c12 - s1*c2)**2 * theta1_var + (s1*s2*s12)**2 * phi1_var)
+    return opening_angle_opt, opening_angle_var
+
