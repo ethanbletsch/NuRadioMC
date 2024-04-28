@@ -26,7 +26,7 @@ from os import cpu_count
 
 import logging
 logger = logging.getLogger(
-    'NuRadioReco.efieldRadioInterferometricReconstruction')
+    'NuRadioReco.efieldRITReconstruction')
 """
 This module hosts to classes
     - efieldInterferometricDepthReco
@@ -511,7 +511,7 @@ class efieldInterferometricDepthReco:
             flu = np.sum(traces ** 2, axis=-1)
             mask = (flu >= self._signal_threshold * np.max(flu))
             logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)
-                        }% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
+                           }% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
 
             if self._debug:
                 ax = plt.figure().add_subplot()
@@ -534,21 +534,25 @@ class efieldInterferometricDepthReco:
         self._positions = pos
 
         if self._use_sim_pulses:
-            cs_shower = coordinatesystems.cstrafo(self._shower[shp.zenith], self._shower[shp.azimuth], magnetic_field_vector=self._shower[shp.magnetic_field_vector])
+            cs_shower = coordinatesystems.cstrafo(
+                self._shower[shp.zenith], self._shower[shp.azimuth], magnetic_field_vector=self._shower[shp.magnetic_field_vector])
             logger.debug(f"self._positions shape: {self._positions.shape}")
-            pos_showerplane = cs_shower.transform_to_vxB_vxvxB(self._positions, core=self._shower[shp.core])
+            pos_showerplane = cs_shower.transform_to_vxB_vxvxB(
+                self._positions, core=self._shower[shp.core])
             if self._debug:
                 ax = plt.figure().add_subplot()
-                ax.scatter(pos_showerplane[:,0], pos_showerplane[:,1], s=1, c=flu[mask])
+                ax.scatter(pos_showerplane[:, 0],
+                           pos_showerplane[:, 1], s=1, c=flu[mask])
                 ax.set_xlabel("vxB [m]")
                 ax.set_ylabel("vxvxB [m]")
                 ax.set_aspect("equal")
                 ax.set_title("positions in showerplane")
                 plt.show()
-            max_vxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:,0]))
-            max_vxvxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:,1]))
+            max_vxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 0]))
+            max_vxvxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 1]))
             self._data["max_vxB_baseline"] = max_vxB_baseline_proxy * units.m
             self._data["max_vxvxB_baseline"] = max_vxvxB_baseline_proxy * units.m
+
 
 class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
     """
@@ -604,7 +608,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         self._initial_grid_spacing = initial_grid_spacing / units.m
         self._cross_section_width = cross_section_width / units.m
 
-        self.set_geometry(shower, core=None, axis=None, smear_angle_radians=axis_spread /
+        self.set_geometry(shower, core=None, axis=None, smear_angle_radians=axis_spread *
                           units.radian, smear_core_meter=core_spread / units.m)
         self.update_atmospheric_model_and_refractivity_table(shower)
 
@@ -647,7 +651,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
         """
         def yiteration(xdx, x):
-        # for xdx, x in enumerate(tqdm(xs)):
+            # for xdx, x in enumerate(tqdm(xs)):
             signals = np.zeros(len(ys_showerplane))
             for ydx, y in enumerate(ys_showerplane):
                 p = p_axis + cs.transform_from_vxB_vxvxB(np.array([x, y, 0]))
@@ -719,15 +723,15 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
             max_mc_vB_coordinate = np.max(np.abs(mc_vB))
             if max_dist < max_mc_vB_coordinate:
-                logger.warn(f"MC axis does not intersect plane to be sampled around p_axis at {depth} g/cm2! " + \
-                            "Extending the plane to include MC axis. " + \
+                logger.warn(f"MC axis does not intersect plane to be sampled around p_axis at {depth} g/cm2! " +
+                            "Extending the plane to include MC axis. " +
                             f"Consider increasing cross section size by at least a factor {max_mc_vB_coordinate / max_dist}, since this warning will not appear for real data;)")
                 max_dist = np.max(np.abs(mc_vB)) + initial_grid_spacing
 
         xlims = np.array([-max_dist, max_dist]) + np.random.uniform(-0.1 *
-                         initial_grid_spacing, 0.1 * initial_grid_spacing, 2)
+                                                                    initial_grid_spacing, 0.1 * initial_grid_spacing, 2)
         ylims = np.array([-max_dist, max_dist]) + np.random.uniform(-0.1 *
-                         initial_grid_spacing, 0.1 * initial_grid_spacing, 2)
+                                                                    initial_grid_spacing, 0.1 * initial_grid_spacing, 2)
         xs = np.arange(xlims[0], xlims[1] +
                        initial_grid_spacing, initial_grid_spacing)
         ys = np.arange(ylims[0], ylims[1] +
@@ -794,7 +798,8 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                 plt.show()
             return point_found, weight, p, np.diag(pcov)
 
-        ground_grid_uncertainty = cs.transform_from_vxB_vxvxB_2D(np.array([dx,dy])/np.sqrt(12))
+        ground_grid_uncertainty = cs.transform_from_vxB_vxvxB_2D(
+            np.array([dx, dy])/np.sqrt(12))
         return point_found, weight, ground_grid_uncertainty
 
     def reconstruct_shower_axis(self):
@@ -858,7 +863,8 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
             new_depth = self._depths[0] - self._binsize
             logger.info("extend to", new_depth)
-            found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(new_depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
+            found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
+                new_depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
 
             self._depths = np.hstack(([new_depth], self._depths))
             found_points = [found_point] + found_points
@@ -873,7 +879,8 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
             new_depth = self._depths[-1] + self._binsize
             logger.info("extend to", new_depth)
-            found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(new_depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
+            found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
+                new_depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
 
             self._depths = np.hstack((self._depths, [new_depth]))
             found_points.append(found_point)
@@ -883,32 +890,41 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
         direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(
             found_points, sigma_points, self._axis, full_output=True)
-        logger.info(f"core: {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
+        logger.info(f"core: {list(np.round(core_rec, 3))
+                             } +- {list(np.round(core_std, 3))} m")
 
         if self._use_sim_pulses:
-            logger.info(f"Opening angle with MC: {np.round(opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
+            logger.info(f"Opening angle with MC: {np.round(
+                opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
 
-
-        #add smaller planes sampled along inital rit axis to increase amount of points to fit final rit axis
+        # add smaller planes sampled along inital rit axis to increase amount of points to fit final rit axis
         if self._refine_axis:
             refinement = 4
-            depths2 = np.linspace(self._depths[0], self._depths[-1], refinement*len(self._depths))
+            depths2 = np.linspace(
+                self._depths[0], self._depths[-1], refinement*len(self._depths))
             for depth in tqdm([d for d in depths2 if d not in self._depths]):
-                found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(depth, core_rec, direction_rec, self._cross_section_width / 4, self._cross_section_width / 20)
+                found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
+                    depth, core_rec, direction_rec, self._cross_section_width / 4, self._cross_section_width / 20)
                 found_points.append(found_point)
                 weights.append(weight)
                 sigma_points.append(ground_grid_uncertainty)
 
-            direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(found_points, sigma_points, direction_rec, full_output=True)
-            logger.info(f"core (refined): {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
+            direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(
+                found_points, sigma_points, direction_rec, full_output=True)
+            logger.info(f"core (refined): {
+                        list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
 
         if self._use_sim_pulses and self._refine_axis:
-            logger.info(f"Opening angle with MC (refined): {np.round(opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
+            logger.info(f"Opening angle with MC (refined): {np.round(
+                opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
         if self._use_sim_pulses and self._refine_axis and self._debug:
-            plot_shower_axis_points(np.array(found_points), np.array(weights), self._shower)
+            plot_shower_axis_points(
+                np.array(found_points), np.array(weights), self._shower)
 
-        self._data["core"] = {"opt": core_rec * units.m, "std": core_std * units.m}
-        self._data["opening_angle_mc"] = {"opt": opening_angle_sph * units.rad, "std": opening_angle_sph_std * units.rad}
+        self._data["core"] = {"opt": core_rec *
+                              units.m, "std": core_std * units.m}
+        self._data["opening_angle_mc"] = {
+            "opt": opening_angle_sph * units.rad, "std": opening_angle_sph_std * units.rad}
         self._data["found_points"] = np.array(found_points)
         self._data["weights"] = np.array(weights)
         return direction_rec, core_rec
@@ -918,7 +934,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         sigma_points = np.array(sigma_points)
 
         popt, pcov = curve_fit(interferometry.fit_axis, points[:, -1], points.flatten(),
-                            sigma=sigma_points.flatten(), p0=[*hp.cartesian_to_spherical(*axis0), 0, 0], absolute_sigma=True)
+                               sigma=sigma_points.flatten(), p0=[*hp.cartesian_to_spherical(*axis0), 0, 0], absolute_sigma=True)
         # popt, pcov = curve_fit(interferometry.fit_axis, points[:, -1], points.flatten(),
         #                     sigma=np.amax(weights) / np.repeat(weights, 3), p0=[*hp.cartesian_to_spherical(*axis0), 0, 0])
         direction_rec = hp.spherical_to_cartesian(*popt[:2])
@@ -927,10 +943,10 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             return direction_rec, core_rec
 
         thetavar, phivar, corex_var, corey_var = np.diag(pcov)
-        opening_angle, opening_angle_var = opening_angle_spherical(*hp.cartesian_to_spherical(*direction_rec), self._shower[shp.zenith], self._shower[shp.azimuth], thetavar, phivar)
+        opening_angle, opening_angle_var = opening_angle_spherical(*hp.cartesian_to_spherical(
+            *direction_rec), self._shower[shp.zenith], self._shower[shp.azimuth], thetavar, phivar)
 
         return direction_rec, core_rec, opening_angle, np.sqrt(opening_angle_var), np.sqrt([corex_var, corey_var])
-
 
     @register_run()
     def run(self,
@@ -938,7 +954,8 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             det: Optional[DetectorBase] = None,
             station_ids: Optional[list] = None, signal_kind="power",
             relative_signal_treshold: float = 0.,
-            depths: np.ndarray = np.arange(400, 900, 100) * units.g / units.cm2,
+            depths: np.ndarray = np.arange(
+                400, 900, 100) * units.g / units.cm2,
             mc_jitter: float = 0 * units.ns,
             ):
         """
@@ -983,11 +1000,13 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
         direction_rec, core_rec = self.reconstruct_shower_axis()
 
-        self._shower.set_parameter(shp.interferometric_shower_axis, direction_rec)
+        self._shower.set_parameter(
+            shp.interferometric_shower_axis, direction_rec)
         self._shower.set_parameter(shp.interferometric_core, core_rec)
 
     def end(self):
         return self._data
+
 
 class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
     def __init__(self):
@@ -1032,10 +1051,14 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
 
         """
 
-        found_point, weight, p, pvar = self.sample_lateral_cross_section(depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing, fit_lateral=True)
-        logger.info(f"index of lorentzian RIT profile {p[0]} +- {np.sqrt(pvar[0])}")
-        logger.info(f"vxB width of vxB RIT profile {p[1]} +- {np.sqrt(pvar[1])}")
-        logger.info(f"vxvxB width of vxB RIT profile {p[2]} +- {np.sqrt(pvar[2])}")
+        found_point, weight, p, pvar = self.sample_lateral_cross_section(
+            depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing, fit_lateral=True)
+        logger.info(f"index of lorentzian RIT profile {
+                    p[0]} +- {np.sqrt(pvar[0])}")
+        logger.info(f"vxB width of vxB RIT profile {
+                    p[1]} +- {np.sqrt(pvar[1])}")
+        logger.info(f"vxvxB width of vxB RIT profile {
+                    p[2]} +- {np.sqrt(pvar[2])}")
         return p
 
     @register_run()
@@ -1082,49 +1105,92 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
 
         self._mc_jitter = mc_jitter / units.ns
 
-
         self.set_station_data(evt, station_ids=station_ids)
 
-        index, sigma_vxB, sigma_vxvxB = self.determine_lateral_shower_width(self._shower[shp.interferometric_shower_maximum / units.g * units.cm2])
+        index, sigma_vxB, sigma_vxvxB = self.determine_lateral_shower_width(
+            self._shower[shp.interferometric_shower_maximum / units.g * units.cm2])
         self._shower.set_parameter(shp.interferometric_width_index, index)
         self._shower.set_parameter(shp.interferometric_width_vxB, sigma_vxB)
-        self._shower.set_parameter(shp.interferometric_width_vxvxB, sigma_vxvxB)
+        self._shower.set_parameter(
+            shp.interferometric_width_vxvxB, sigma_vxvxB)
 
     def end(self):
         pass
 
 
-def plot_shower_axis_points(found_points: np.ndarray, weights: np.ndarray, shower: BaseShower, points_delta: Optional[np.ndarray] = None):
-    fig = plt.figure()
-    gs = gridspec.GridSpec(2,2,figure=fig, height_ratios=[1,15], hspace=0.1)
-    cs = coordinatesystems.cstrafo(shower[shp.zenith], shower[shp.azimuth], shower[shp.magnetic_field_vector])
-    found_points_showerplane = cs.transform_to_vxB_vxvxB(found_points, shower[shp.core])
-    x,y,z = found_points_showerplane.T
-    z *= -1
-    ax_z = fig.add_subplot(gs[1,0])
-    ax_w = fig.add_subplot(gs[1,1])
-    sm_z = ax_z.scatter(x,y, c=z, cmap=plt.cm.viridis, marker="v")
-    if points_delta is not None:
-        delta_showerplane = cs.transform_to_vxB_vxvxB(points_delta)
-        dx, dy, dz = delta_showerplane.T
-        ax_z.errorbar(x,y,dy,dx,capsize=.2, zorder=.99)
-    # ax_z.plot(x,y,lw=.1, ls="--", color="k")
-    colorbar.Colorbar(ax=fig.add_subplot(gs[0,0]), orientation="horizontal", label="RIT -v [m]", ticklocation="top", mappable=sm_z)
-    ax_z.set_xlabel("RIT vxB [m]")
-    ax_z.set_ylabel("RIT vxvxB [m]")
+def plot_shower_axis_points(points: np.ndarray, weights: np.ndarray, shower: BaseShower):
+    cs = coordinatesystems.cstrafo(
+        shower[shp.zenith], shower[shp.azimuth], shower[shp.magnetic_field_vector])
+    logger.debug(f"points shape: {points.shape}")
+    assert points.shape[:-1] == weights.shape
+    if len(points.shape) == 3:
+        permutation = np.argsort(points[0, :, -1])
+        points_showerplane = []
+        for axispoints in points:
+            axispoints_showerplane = cs.transform_to_vxB_vxvxB(
+                axispoints, shower[shp.core])
+            points_showerplane.append(axispoints_showerplane)
+        points_showerplane = np.array(points_showerplane)
+        points_showerplane[..., -1] *= -1  # v-> -v
+        quantiles = np.quantile(points_showerplane, [.16, .5, .84], axis=0)[:, permutation]
+        assert np.all(quantiles[0] <= quantiles[1]) and np.all(quantiles[1] <= quantiles[2])
+        median_showerplane = quantiles[1]
+        delta_showerplane = quantiles[[0, 2]]
+        logger.debug(f"permutation_shape {permutation.shape}")
+        logger.debug(f"permuted shape: {median_showerplane.shape}")
+        weights_median = np.median(weights, axis=0)[permutation]
+        weights_median /= np.max(weights_median)
 
-    sm_w = ax_w.scatter(x,z, c=y, cmap=plt.cm.plasma, marker="v")
-    # ax_w.plot(x,z,color="k", ls="--", lw=.1)
-    if points_delta is not None:
-        ax_w.errorbar(x,z,dz,dx, capsize=.2, zorder=.99)
-    colorbar.Colorbar(ax=fig.add_subplot(gs[0,1]), orientation="horizontal", label="RIT vxvxB [m]", ticklocation="top", mappable=sm_w)
-    ax_w.set_xlabel("RIT vxB [m]")
-    ax_w.set_ylabel("RIT -v [m]")
+    elif len(points.shape == 2):
+        permutation = np.argsort(points[:, -1])
+        median_showerplane = cs.transform_to_vxB_vxvxB(
+            points[permutation], shower[shp.core])
+        median_showerplane[..., -1] *= -1
+        delta_showerplane = None
+        weights_median = np.copy(weights)[permutation]
+        weights_median /= np.max(weights_median)
+
+    else:
+        raise ValueError("points must be 2d or 3d.")
+
+    fig = plt.figure()
+    gs = gridspec.GridSpec(2, 2, figure=fig, height_ratios=[1, 15], hspace=0.1)
+    x, y, z = median_showerplane.T
+    ax_z = fig.add_subplot(gs[1, 0])
+    ax_w = fig.add_subplot(gs[1, 1])
+    weight_modifier = 10
+    sm_z = ax_z.scatter(x, y, c=z, s=weight_modifier * weights_median, cmap=plt.cm.viridis, marker="v", zorder=1.1)
+    if delta_showerplane is not None:
+        assert np.all(delta_showerplane[0] <= median_showerplane) and np.all(median_showerplane <= delta_showerplane[1])
+        delta_showerplane[0] = median_showerplane - delta_showerplane[0]
+        delta_showerplane[1] -= median_showerplane
+        dx, dy, dz = np.moveaxis(delta_showerplane, -1, 0)
+
+        eb_kwargs = {"capsize": 1.5, "zorder": .99,
+                     "elinewidth": .1, "capthick": .1, "lw": .1, "ecolor": "k"}
+
+        ax_z.errorbar(x, y, dy, dx, **eb_kwargs)
+    cb = colorbar.Colorbar(ax=fig.add_subplot(
+        gs[0, 0]), orientation="horizontal", label="RIT -v [m]", ticklocation="top", mappable=sm_z)
+    cb.ax.tick_params(labelsize="x-small")
+    ax_z.set_xlabel("RIT vxB [m]", fontsize="small")
+    ax_z.set_ylabel("RIT vxvxB [m]", fontsize="small")
+
+    sm_w = ax_w.scatter(x, z, c=y, s=weight_modifier * weights_median, cmap=plt.cm.plasma, marker="v", zorder=1.1)
+    if delta_showerplane is not None:
+        ax_w.errorbar(x, z, dz, dx, **eb_kwargs)
+    cb = colorbar.Colorbar(ax=fig.add_subplot(
+        gs[0, 1]), orientation="horizontal", label="RIT vxvxB [m]", ticklocation="top", mappable=sm_w)
+    cb.ax.tick_params(labelsize="x-small")
+    ax_w.set_xlabel("RIT vxB [m]", fontsize="small")
+    ax_w.set_ylabel("RIT -v [m]", fontsize="small")
     for ax in [ax_z, ax_w]:
-        ax.spines[["top","right"]].set_visible(True)
+        ax.spines[["top", "right"]].set_visible(True)
+        ax.tick_params(labelsize="x-small")
         ax.grid(visible=True, lw=.2)
     plt.tight_layout()
     plt.show()
+
 
 def plot_lateral_cross_section(
         xs, ys, signals, mc_pos=None, fname=None, title=None):
@@ -1185,10 +1251,12 @@ def plot_lateral_cross_section(
     else:
         plt.show()
 
+
 def normal(x, A, x0, sigma):
     """ Gauss curve """
     return A / np.sqrt(2 * np.pi * sigma ** 2) \
         * np.exp(-1 / 2 * ((x - x0) / sigma) ** 2)
+
 
 def gaussian_2d(xy, A, mux, muy, sigmax, sigmay):
     mu = np.array([mux, muy])
@@ -1311,6 +1379,7 @@ def angle_between(v1: np.ndarray, v2: np.ndarray):
     v2_u = v2 / np.linalg.norm(v2, axis=0)
     return np.arccos(v1_u @ v2_u)
 
+
 def opening_angle_spherical(theta1, phi1, theta2, phi2, theta1_var, phi1_var):
     """Give the the opening angle and variance on the opening angle between two vectors with spherical coordinates (1, theta, phi), asuming the second vector is known, such that theta2_var, phi2_var are not asked"""
     c1 = np.cos(theta1)
@@ -1321,6 +1390,6 @@ def opening_angle_spherical(theta1, phi1, theta2, phi2, theta1_var, phi1_var):
     c12 = np.cos(phi1 - phi2)
     arg = s1*s2*c12 + c1*c2
     opening_angle_opt = np.arccos(arg)
-    opening_angle_var = (1/(1-arg**2)) * ((c1*s2*c12 - s1*c2)**2 * theta1_var + (s1*s2*s12)**2 * phi1_var)
+    opening_angle_var = (1/(1-arg**2)) * ((c1*s2*c12 - s1*c2)
+                                          ** 2 * theta1_var + (s1*s2*s12)**2 * phi1_var)
     return opening_angle_opt, opening_angle_var
-
