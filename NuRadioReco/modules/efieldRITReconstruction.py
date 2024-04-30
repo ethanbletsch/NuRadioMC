@@ -510,8 +510,7 @@ class efieldInterferometricDepthReco:
         if self._signal_threshold > 0:
             flu = np.sum(traces ** 2, axis=-1)
             mask = (flu >= self._signal_threshold * np.max(flu))
-            logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)
-                           }% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
+            logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)}% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
 
             if self._debug:
                 ax = plt.figure().add_subplot()
@@ -890,12 +889,10 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
         direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(
             found_points, sigma_points, self._axis, full_output=True)
-        logger.info(f"core: {list(np.round(core_rec, 3))
-                             } +- {list(np.round(core_std, 3))} m")
+        logger.info(f"core: {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
 
         if self._use_sim_pulses:
-            logger.info(f"Opening angle with MC: {np.round(
-                opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
+            logger.info(f"Opening angle with MC: {np.round(opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
 
         # add smaller planes sampled along inital rit axis to increase amount of points to fit final rit axis
         if self._refine_axis:
@@ -911,12 +908,10 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
             direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(
                 found_points, sigma_points, direction_rec, full_output=True)
-            logger.info(f"core (refined): {
-                        list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
+            logger.info(f"core (refined): {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
 
         if self._use_sim_pulses and self._refine_axis:
-            logger.info(f"Opening angle with MC (refined): {np.round(
-                opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
+            logger.info(f"Opening angle with MC (refined): {np.round(opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
         if self._use_sim_pulses and self._refine_axis and self._debug:
             plot_shower_axis_points(
                 np.array(found_points), np.array(weights), self._shower)
@@ -1053,12 +1048,9 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
 
         found_point, weight, p, pvar = self.sample_lateral_cross_section(
             depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing, fit_lateral=True)
-        logger.info(f"index of lorentzian RIT profile {
-                    p[0]} +- {np.sqrt(pvar[0])}")
-        logger.info(f"vxB width of vxB RIT profile {
-                    p[1]} +- {np.sqrt(pvar[1])}")
-        logger.info(f"vxvxB width of vxB RIT profile {
-                    p[2]} +- {np.sqrt(pvar[2])}")
+        logger.info(f"index of lorentzian RIT profile {p[0]} +- {np.sqrt(pvar[0])}")
+        logger.info(f"vxB width of vxB RIT profile {p[1]} +- {np.sqrt(pvar[1])}")
+        logger.info(f"vxvxB width of vxB RIT profile {p[2]} +- {np.sqrt(pvar[2])}")
         return p
 
     @register_run()
@@ -1118,17 +1110,25 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         pass
 
 
-def plot_shower_axis_points(points: np.ndarray, weights: np.ndarray, shower: BaseShower):
-    cs = coordinatesystems.cstrafo(
-        shower[shp.zenith], shower[shp.azimuth], shower[shp.magnetic_field_vector])
+def plot_shower_axis_points(points: np.ndarray, weights: np.ndarray, shower: Optional[BaseShower] = None):
+    if shower is not None:
+        cs = coordinatesystems.cstrafo(
+            shower[shp.zenith], shower[shp.azimuth], shower[shp.magnetic_field_vector])
+    else:
+        logger.warn("plot_shower_axis: no shower passed, assuming showerplane points")
+        cs = None
+
     logger.debug(f"points shape: {points.shape}")
     assert points.shape[:-1] == weights.shape
     if len(points.shape) == 3:
         permutation = np.argsort(points[0, :, -1])
         points_showerplane = []
         for axispoints in points:
-            axispoints_showerplane = cs.transform_to_vxB_vxvxB(
-                axispoints, shower[shp.core])
+            if shower is not None:
+                axispoints_showerplane = cs.transform_to_vxB_vxvxB(
+                    axispoints, shower[shp.core])
+            else:
+                axispoints_showerplane = axispoints
             points_showerplane.append(axispoints_showerplane)
         points_showerplane = np.array(points_showerplane)
         points_showerplane[..., -1] *= -1  # v-> -v
@@ -1143,8 +1143,11 @@ def plot_shower_axis_points(points: np.ndarray, weights: np.ndarray, shower: Bas
 
     elif len(points.shape == 2):
         permutation = np.argsort(points[:, -1])
-        median_showerplane = cs.transform_to_vxB_vxvxB(
-            points[permutation], shower[shp.core])
+        if shower is not None:
+            median_showerplane = cs.transform_to_vxB_vxvxB(
+                points[permutation], shower[shp.core])
+        else:
+            median_showerplane = np.copy(points)[permutation]
         median_showerplane[..., -1] *= -1
         delta_showerplane = None
         weights_median = np.copy(weights)[permutation]
@@ -1188,7 +1191,9 @@ def plot_shower_axis_points(points: np.ndarray, weights: np.ndarray, shower: Bas
         ax.spines[["top", "right"]].set_visible(True)
         ax.tick_params(labelsize="x-small")
         ax.grid(visible=True, lw=.2)
-    plt.tight_layout()
+
+    if shower is not None:
+        fig.suptitle(f"zenith {shower[shp.zenith] / units.deg: .1f} deg, azimuth {shower[shp.azimuth] / units.deg: .1f} deg")
     plt.show()
 
 
