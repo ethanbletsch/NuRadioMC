@@ -5,21 +5,20 @@ from NuRadioReco.framework.parameters import showerParameters as shp
 from radiotools import helper as hp, coordinatesystems
 from radiotools.atmosphere import models, refractivity
 
-from NuRadioReco.framework.electric_field import ElectricField
 from NuRadioReco.framework.event import Event
 from NuRadioReco.framework.station import Station
 from NuRadioReco.framework.base_shower import BaseShower
 from NuRadioReco.detector.detector_base import DetectorBase
 
 import numpy as np
-from scipy import stats
+import scipy
 import sys
-import copy
 import matplotlib.pyplot as plt
 from matplotlib import gridspec, colorbar
 from scipy.optimize import curve_fit
 
 from typing import Optional
+from collections import defaultdict
 
 from tqdm import tqdm
 from os import cpu_count
@@ -59,6 +58,8 @@ class efieldInterferometricDepthReco:
         self._debug = None
         self._at = None
         self._tab = None
+        self._det = None
+        self._use_channels = None
         self._signal_kind = None
         self._signal_threshold = None
         self._traces = None
@@ -109,7 +110,14 @@ class efieldInterferometricDepthReco:
         self._cs = coordinatesystems.cstrafo(
             *hp.cartesian_to_spherical(*self._axis), shower[shp.magnetic_field_vector])
 
-    def begin(self, shower: BaseShower, core: Optional[np.ndarray] = None, axis: Optional[np.ndarray] = None, n_sampling: int = 256, use_sim_pulses: bool = False, debug: bool = False):
+    def begin(self,
+              shower: BaseShower,
+              core: Optional[np.ndarray] = None,
+              axis: Optional[np.ndarray] = None,
+              n_sampling: int = 256,
+              use_sim_pulses: bool = False,
+              use_channels: bool = False,
+              debug: bool = False):
         """
         Set module config.
 
@@ -135,6 +143,7 @@ class efieldInterferometricDepthReco:
         """
         self._debug = debug
         self._nsampling = n_sampling
+        self._use_channels = use_channels
         self._use_sim_pulses = use_sim_pulses
 
         self.set_geometry(shower, core, axis)
@@ -149,6 +158,7 @@ class efieldInterferometricDepthReco:
 
         traces : array(number_of_antennas, samples)
             Electric field traces (one polarisation of it, usually vxB) for all antennas/stations.
+
 
         times : array(number_of_antennas, samples)
             Time vectors corresponding to the electric field traces.
@@ -359,7 +369,7 @@ class efieldInterferometricDepthReco:
         shower_axis, core: np.ndarray (3,)
             Geometry to be used to reconstruct XRIT; ignores the geometry of `shower` (but keeps magnetic field vector)
         """
-
+        self._det = det
         self._signal_kind = signal_kind
         self._signal_threshold = relative_signal_treshold
 
@@ -405,7 +415,7 @@ class efieldInterferometricDepthReco:
 
         shower : BaseShower
         """
-        logger.warn(
+        logger.warning(
             "flat earth geometry assumed. default was curved. If issue has been fixed, consider moving back to curved")
         curved = False
 
@@ -477,14 +487,28 @@ class efieldInterferometricDepthReco:
             if self._use_sim_pulses:
                 station = station.get_sim_station()
 
-            electric_field: ElectricField
-            for electric_field in station.get_electric_fields():
-                trace_vector = self._cs.transform_to_vxB_vxvxB(
-                    electric_field.get_trace())
-                # trace = np.linalg.norm(trace_vector, axis=0)
-                trace = trace_vector[0]
-                time = copy.copy(electric_field.get_times())
+            if self._use_channels:
+                chan_id_per_groupid = select_channels_per_station(self._det, station_id)
+                trace_per_pol = [(station.get_channel(ids[0]).get_trace(), station.get_channel(ids[1]).get_trace()) for ids in chan_id_per_groupid.values()]
+                trace_per_pol = np.asarray(trace_per_pol)
+                pol_weights = np.sum(np.square(trace_per_pol), axis=-1)
+                strongest_pol_per_group = np.argmax(pol_weights[pol_weights > self._signal_threshold * np.max(pol_weights)], axis=1)
+                unique, counts = np.unique(strongest_pol_per_group)
+                strongest_pol_overall = unique[np.argmax(counts)]
+                chan_ids = [ids_of_group[strongest_pol_overall] for ids_of_group in chan_id_per_groupid]
+                station_position = self._det.get_absolute_position(station_id)
+                positions_and_times_and_traces = [((station_position
+                                                    + self._det.get_relative_position(station_id, id)),
+                                                   station.get_channel(id).get_times(),
+                                                   station.get_channel(id).get_trace())
+                                                  for id in chan_ids]
+            else:
+                positions_and_times_and_traces = [(electric_field.get_position(),
+                                                   electric_field.get_times(),
+                                                   self._cs.transform_to_vxB_vxvxB(electric_field.get_trace()))[0]
+                                                  for electric_field in station.get_electric_fields()]
 
+            for position, time, trace in positions_and_times_and_traces:
                 if self._use_sim_pulses and self._mc_jitter > 0:
                     time += np.random.normal(scale=self._mc_jitter)
                 if self._nsampling is not None:
@@ -501,7 +525,7 @@ class efieldInterferometricDepthReco:
 
                 traces.append(trace)
                 times.append(time)
-                pos.append(electric_field.get_position())
+                pos.append(position)
 
         traces = np.array(traces)
         times = np.array(times)
@@ -564,8 +588,11 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
     def begin(self,
               shower: BaseShower,
+              core: Optional[np.ndarray] = None,
+              axis: Optional[np.ndarray] = None,
               n_sampling: int = 256,
               use_sim_pulses: bool = False,
+              use_channels: bool = False,
               core_spread: float = 10 * units.m,
               axis_spread: float = 1*units.deg,
               multiprocessing: bool = False,
@@ -602,12 +629,20 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         self._refine_axis = refine_axis
         self._nsampling = n_sampling
         self._use_sim_pulses = use_sim_pulses
+        self._use_channels = use_channels
         self._multiprocessing = multiprocessing
         self._angres = sample_angular_resolution / units.radian
         self._initial_grid_spacing = initial_grid_spacing / units.m
         self._cross_section_width = cross_section_width / units.m
 
-        self.set_geometry(shower, core=None, axis=None, smear_angle_radians=axis_spread *
+        if core is not None:
+            logger.warning("Passed core, setting core spread to 0.")
+            core_spread = 0
+        if axis is not None:
+            logger.warning("Passed axis, setting axis spread to 0.")
+            axis_spread = 0
+
+        self.set_geometry(shower, core=core, axis=axis, smear_angle_radians=axis_spread *
                           units.radian, smear_core_meter=core_spread / units.m)
         self.update_atmospheric_model_and_refractivity_table(shower)
 
@@ -681,7 +716,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                 signals = Parallel(n_jobs=max(min(cpu_count() // 2, len(xs_showerplane)), 2))(
                     delayed(yiteration)(xdx, x) for xdx, x in enumerate(xs_showerplane))
             except ImportError:
-                logger.warn("Could not import joblib, single process instead")
+                logger.warning("Could not import joblib, single process instead")
                 self._multiprocessing = False
 
         if not self._multiprocessing:
@@ -692,18 +727,22 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         idx = np.argmax(signals)
         return idx, signals
 
-    def sample_lateral_cross_section(
-            self, depth: float, core: np.ndarray, axis: np.ndarray, cross_section_width: float, initial_grid_spacing: float, fit_lateral: bool = False):
-
+    def get_paxis_dr_target(self, depth: float, core: np.ndarray, axis: np.ndarray):
         zenith, azimuth = hp.cartesian_to_spherical(*axis)
-        cs = coordinatesystems.cstrafo(
-            zenith, azimuth, magnetic_field_vector=self._shower[shp.magnetic_field_vector])
 
         dist = self._at.get_distance_xmax_geometric(
             zenith, depth, observation_level=core[-1])
         dr_ref_target = np.tan(self._angres) * dist
         p_axis = axis * dist + core
+        return p_axis, dr_ref_target
 
+    def sample_lateral_cross_section(
+            self, depth: float, core: np.ndarray, axis: np.ndarray, cross_section_width: float, initial_grid_spacing: float, determine_width: bool = False):
+        zenith, azimuth = hp.cartesian_to_spherical(*axis)
+        cs = coordinatesystems.cstrafo(
+            zenith, azimuth, magnetic_field_vector=self._shower[shp.magnetic_field_vector])
+
+        p_axis, dr_ref_target = self.get_paxis_dr_target(depth, core, axis)
         max_dist = cross_section_width / 2 + initial_grid_spacing
 
         if self._use_sim_pulses:
@@ -722,9 +761,9 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
             max_mc_vB_coordinate = np.max(np.abs(mc_vB))
             if max_dist < max_mc_vB_coordinate:
-                logger.warn(f"MC axis does not intersect plane to be sampled around p_axis at {depth} g/cm2! " +
-                            "Extending the plane to include MC axis. " +
-                            f"Consider increasing cross section size by at least a factor {max_mc_vB_coordinate / max_dist}, since this warning will not appear for real data;)")
+                logger.warning(f"MC axis does not intersect plane to be sampled around p_axis at {depth} g/cm2! " +
+                               "Extending the plane to include MC axis. " +
+                               f"Consider increasing cross section size by at least a factor {max_mc_vB_coordinate / max_dist: .2f}, since this warning will not appear for real data;)")
                 max_dist = np.max(np.abs(mc_vB)) + initial_grid_spacing
 
         xlims = np.array([-max_dist, max_dist]) + np.random.uniform(-0.1 *
@@ -776,7 +815,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         point_found = p_axis + \
             cs.transform_from_vxB_vxvxB(np.array([xfound, yfound, 0]))
 
-        if fit_lateral:
+        if determine_width:
             def lorentzian_2d(xy, alpha, lx, ly):
                 return weight / (np.power(1., 1/alpha) + np.sum(np.square((xy - np.asarray([xfound, yfound])[:, np.newaxis]) / np.asarray([lx, ly])[:, np.newaxis]), axis=0))**alpha
 
@@ -888,7 +927,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             counter += 1
 
         direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(
-            found_points, sigma_points, self._axis, full_output=True)
+            found_points, weights, self._axis, self._core, full_output=True)
         logger.info(f"core: {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
 
         if self._use_sim_pulses:
@@ -907,7 +946,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                 sigma_points.append(ground_grid_uncertainty)
 
             direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(
-                found_points, sigma_points, direction_rec, full_output=True)
+                found_points, weights, direction_rec, core_rec, full_output=True)
             logger.info(f"core (refined): {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
 
         if self._use_sim_pulses and self._refine_axis:
@@ -924,14 +963,14 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         self._data["weights"] = np.array(weights)
         return direction_rec, core_rec
 
-    def fit_axis(self, points, sigma_points, axis0, full_output: bool = False):
+    def fit_axis(self, points, weights, axis0, core0, full_output: bool = False):
         points = np.array(points)
-        sigma_points = np.array(sigma_points)
+        weights = np.array(weights)
 
-        popt, pcov = curve_fit(interferometry.fit_axis, points[:, -1], points.flatten(),
-                               sigma=sigma_points.flatten(), p0=[*hp.cartesian_to_spherical(*axis0), 0, 0], absolute_sigma=True)
         # popt, pcov = curve_fit(interferometry.fit_axis, points[:, -1], points.flatten(),
-        #                     sigma=np.amax(weights) / np.repeat(weights, 3), p0=[*hp.cartesian_to_spherical(*axis0), 0, 0])
+        #                        sigma=sigma_points.flatten(), p0=[*hp.cartesian_to_spherical(*axis0), 0, 0], absolute_sigma=True)
+        popt, pcov = curve_fit(interferometry.fit_axis, points[:, -1], points.flatten(),
+                               sigma=np.amax(weights) / np.repeat(weights, 3), p0=[*hp.cartesian_to_spherical(*axis0), core0[0], core0[1]])
         direction_rec = hp.spherical_to_cartesian(*popt[:2])
         core_rec = interferometry.fit_axis(np.array([self._core[-1]]), *popt)
         if not full_output:
@@ -984,6 +1023,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             initial lateral grid spacing to use.
 
         """
+        self._det = det
         self._signal_kind = signal_kind
         self._signal_threshold = relative_signal_treshold
 
@@ -1006,57 +1046,110 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
     def __init__(self):
         super().__init__()
+        self._lateral_sample_count = None
 
-    def determine_lateral_shower_width(self, depth: float):
+    def begin(self,
+              shower: BaseShower,
+              core: Optional[np.ndarray] = None,
+              axis: Optional[np.ndarray] = None,
+              n_sampling: int = 256,
+              use_sim_pulses: bool = False,
+              use_channels: bool = False,
+              multiprocessing: bool = False,
+              sample_angular_resolution: float = 0.005*units.deg,
+              initial_grid_spacing: float = 60*units.m,
+              cross_section_width: float = 500*units.m,
+              lateral_vxB_sample_count: int = 80,
+              debug: bool = False
+              ):
         """
-        Determine the showerplane coordinates widths of a lateral cross section profile.
+        Set module config.
 
-        traces : array(number_of_antennas, samples)
-            Electric field traces (one polarisation of it, usually vxB) for all antennas/stations.
+        Parameters
+        ----------
 
-        times : array(number_of_antennas, samples)
-            Time vectors corresponding to the electric field traces.
+        signal_kind : str
+            Define which signal "metric" is used on the beamformed traces. Default "power" : sum over the squared amplitudes in a 100 ns window around the peak.
+            Other options are "amplitude" or "hilbert_sum"
 
-        station_positions : array(number_of_antennas, 3)
-            Position of each antenna.
+        relative_signal_treshold: float (default = 0.)
+           Fraction of strongest signal necessary for a trace to be used for RIT. Default of 0 includes all channels.
 
-        shower_axis_inital : array(3,)
-            Axis/direction which is used as initial guess for the true shower axis.
-            Around this axis the interferometric signals are sample on 2-d planes.
+        depths: np.ndarray (default: units.g / units.cm2 * np.arange(400,800,10))
+            depths to coarsely sample the axis with, in internal units
 
-        core : array(3,)
-            Shower core which is used as initial guess. Keep in mind that the altitudes (z-coordinate) matters.
+        mc_jitter: float (default: 0.)
+            Timing jitter to put on traces, in internal units (==nanoseconds)
 
-        magnetic_field_vector : array(3,)
-            Magnetic field vector of the site you are using.
-
-        depth: float
-            Slant depth at which to fit the lateral distribution
-
-        is_mc : bool
-            If true, interprete the provided shower axis as truth and add some gaussian smearing to optain an
-            inperfect initial guess for the shower axis (Default: True).
-
-        initial_grid_spacing : double
-            Spacing of your grid points in meters (Default: 60m)
-
-        cross_section_size : double
-            Side length on the 2-d planes (slice) along which the maximum around the initial axis is sampled in meters
-            (Default: 1000m).
+        debug : bool
+            If true, show some debug plots (Default: False).
 
         """
+        self._debug = debug
+        self._nsampling = n_sampling
+        self._use_sim_pulses = use_sim_pulses
+        self._use_channels = use_channels
+        self._multiprocessing = multiprocessing
+        self._angres = sample_angular_resolution / units.radian
+        self._cross_section_width = cross_section_width / units.m
+        self._initial_grid_spacing = initial_grid_spacing / units.m
+        self._lateral_sample_count = lateral_vxB_sample_count
 
-        found_point, weight, p, pvar = self.sample_lateral_cross_section(
-            depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing, fit_lateral=True)
-        logger.info(f"index of lorentzian RIT profile {p[0]} +- {np.sqrt(pvar[0])}")
-        logger.info(f"vxB width of vxB RIT profile {p[1]} +- {np.sqrt(pvar[1])}")
-        logger.info(f"vxvxB width of vxB RIT profile {p[2]} +- {np.sqrt(pvar[2])}")
-        return p
+        self.set_geometry(shower, core=core, axis=axis)
+        self.update_atmospheric_model_and_refractivity_table(shower)
+
+    def get_lateral_profile(self, p_axis: np.ndarray, xs: np.ndarray):
+        signals = np.zeros(len(xs))
+        for xdx, x in enumerate(tqdm(xs)):
+            p = p_axis + self._cs.transform_from_vxB_vxvxB(np.array([x, 0, 0]))
+
+            sum_trace = interferometry.interfere_traces_interpolation(
+                p, self._positions, self._traces, self._times, tab=self._tab)
+
+            signal = interferometry.get_signal(
+                sum_trace, self._tstep, kind=self._signal_kind)
+            signals[xdx] = signal
+        return signals
+
+    def find_fwhm(self, depth: float):
+        p_axis, dr_ref_target = self.get_paxis_dr_target(depth, self._core, self._axis)
+        max_dist = self._cross_section_width / 2
+        xlims = np.array([-max_dist, max_dist])
+        # xs = np.arange(xlims[0], xlims[1] +
+        #                self._lateral_spacing, self._lateral_spacing)
+
+        n = self._lateral_sample_count // 2
+        xs = np.hstack([np.geomspace(xlims[0], -dr_ref_target, n), np.geomspace(dr_ref_target, xlims[1], n)])
+
+        lateral_vxB_profile = self.get_lateral_profile(p_axis, xs)
+
+        pk_half = scipy.signal.peak_widths(lateral_vxB_profile,
+                                           [np.argmax(lateral_vxB_profile)],
+                                           rel_height=.5)
+        pk_full = scipy.signal.peak_widths(lateral_vxB_profile,
+                                           [np.argmax(lateral_vxB_profile)],
+                                           rel_height=1)
+
+        fwhm = pk_half[0][0]
+
+        if self._debug:
+            ax = plt.figure().add_subplot()
+            ax.scatter(xs, lateral_vxB_profile, marker="v", s=1.2)
+            ax.set_xlabel(r"$x_{\mathbf{v}\times\mathbf{B}}$ [m]")
+            ax.set_ylabel(f"Summed {self._signal_kind}")
+            ax.hlines(pk_half[1][0], xs[round(pk_half[2][0])], xs[round(pk_half[3][0])], color="pink", label="FWHM")
+            ax.hlines(pk_full[1][0], xs[round(pk_full[2][0])], xs[round(pk_full[3][0])], color="green", label="FWFM")
+            ax.legend()
+            plt.show()
+            sys.exit()
+
+        return fwhm
 
     @register_run()
     def run(self,
             evt: Event,
             det: Optional[DetectorBase] = None,
+            depth: Optional[float] = None,
             station_ids: Optional[list] = None, signal_kind="power",
             relative_signal_treshold: float = 0.,
             mc_jitter: float = 0 * units.ns,
@@ -1092,6 +1185,7 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
             initial lateral grid spacing to use.
 
         """
+        self._det = det
         self._signal_kind = signal_kind
         self._signal_threshold = relative_signal_treshold
 
@@ -1099,12 +1193,12 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
 
         self.set_station_data(evt, station_ids=station_ids)
 
-        index, sigma_vxB, sigma_vxvxB = self.determine_lateral_shower_width(
-            self._shower[shp.interferometric_shower_maximum / units.g * units.cm2])
-        self._shower.set_parameter(shp.interferometric_width_index, index)
-        self._shower.set_parameter(shp.interferometric_width_vxB, sigma_vxB)
-        self._shower.set_parameter(
-            shp.interferometric_width_vxvxB, sigma_vxvxB)
+        if depth is None:
+            depth = self._shower[shp.interferometric_shower_maximum]
+
+        fwhm = self.find_fwhm(depth / units.g * units.cm2)
+        self._shower.set_parameter(shp.interferometric_fwhm, fwhm * units.m)
+        logger.info(f"Interferometric vxB FWHM at {depth / units.g * units.cm2: .2f} g/cm2: {fwhm: .2f} m")
 
     def end(self):
         pass
@@ -1115,7 +1209,7 @@ def plot_shower_axis_points(points: np.ndarray, weights: np.ndarray, shower: Opt
         cs = coordinatesystems.cstrafo(
             shower[shp.zenith], shower[shp.azimuth], shower[shp.magnetic_field_vector])
     else:
-        logger.warn("plot_shower_axis: no shower passed, assuming showerplane points")
+        logger.warning("plot_shower_axis: no shower passed, assuming showerplane points")
         cs = None
 
     logger.debug(f"points shape: {points.shape}")
@@ -1270,7 +1364,7 @@ def gaussian_2d(xy, A, mux, muy, sigmax, sigmay):
                       mu[:, np.newaxis] / (sigma[:, np.newaxis])) / 2, axis=0))
 
 
-class vonmises_fisher(stats._multivariate.multi_rv_generic):
+class vonmises_fisher(scipy.stats._multivariate.multi_rv_generic):
     """copy of scipy.stats.vonmises_fisher"""
 
     def __init__(self, seed=None):
@@ -1322,7 +1416,7 @@ class vonmises_fisher(stats._multivariate.multi_rv_generic):
         # (y, z) are random 2D vectors that only have to be
         # normalized accordingly. Then (x, y z) follow a VMF distribution
         temp = np.sqrt(1. - np.square(x))
-        dist = stats.uniform_direction(2)
+        dist = scipy.stats.uniform_direction(2)
         uniformcircle = dist.rvs(sample_size, random_state)
         samples = np.stack([x, temp * uniformcircle[..., 0],
                            temp * uniformcircle[..., 1]], axis=-1)
@@ -1398,3 +1492,37 @@ def opening_angle_spherical(theta1, phi1, theta2, phi2, theta1_var, phi1_var):
     opening_angle_var = (1/(1-arg**2)) * ((c1*s2*c12 - s1*c2)
                                           ** 2 * theta1_var + (s1*s2*s12)**2 * phi1_var)
     return opening_angle_opt, opening_angle_var
+
+
+def select_channels_per_station(det: DetectorBase, station_id: int,
+                                requested_channel_ids: Optional[list] = None) -> defaultdict:
+    # TODO: centralize this function which is a copy from readCoREASInterpolator, and replace the usage of this one.
+    """
+
+    Returns a defaultdict object containing the requeasted channel ids that are in the given station.
+    This dict contains the channel group ids as keys with lists of channel ids as values.
+
+    Parameters
+    ----------
+    det : DetectorBase
+        The detector object that contains the station
+    station_id : int
+        The station id to select channels from
+    requested_channel_ids : list
+        List of requested channel ids
+    """
+    if requested_channel_ids is None:
+        requested_channel_ids = det.get_channel_ids(station_id)
+    else:
+        # ensure ordering as coming from det
+        requested_channel_ids = [id for id in det.get_channel_ids(station_id) if id in requested_channel_ids]
+
+    channel_ids = defaultdict(list)
+    for channel_id in requested_channel_ids:
+        if channel_id in det.get_channel_ids(station_id):
+            channel_group_id = det.get_channel_group_id(station_id, channel_id)
+            if channel_group_id == -1:
+                channel_group_id = channel_id
+            channel_ids[channel_group_id].append(channel_id)
+
+    return channel_ids

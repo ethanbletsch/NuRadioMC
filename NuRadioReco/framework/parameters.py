@@ -128,6 +128,7 @@ class showerParameters(Enum):
     interferometric_width_vxB = 123 # standard deviation in the vxB direction of the lateral RIT profile at interferometric_shower_maximum
     interferometric_width_vxvxB = 124 # standard deviation in the vxvxB direction of the lateral RIT profile at interferometric_shower_maximum
     interferometric_width_index = 125 # lorentzian index of lateral RIT profile at interferometric_shower_maximum
+    interferometric_fwhm = 126
 
 class particleParameters(Enum):
     parent_id = 1 #: the entry number of the parent particle, None if primary.
