@@ -12,7 +12,7 @@ from NuRadioReco.framework.parameters import stationParameters as stnp
 from NuRadioReco.framework.parameters import electricFieldParameters as efp
 from NuRadioReco.framework.parameters import showerParameters as shp
 import logging
-logger = logging.getLogger('coreas')
+logger = logging.getLogger('NuRadioReco.coreas')
 
 warning_printed_coreas_py = False
 
@@ -123,7 +123,15 @@ def calculate_simulation_weights(positions, zenith, azimuth, site='summit', debu
     return weights
 
 
-def make_sim_station(station_id, corsika, observer, channel_ids, weight=None):
+def observer_to_si_geomagnetic(observer):
+    data = np.copy(observer)
+    data[:, 1], data[:, 2] = -observer[:, 2], observer[:, 1]
+    data[:, 0] *= units.second
+    data[:, 1:4] *= conversion_fieldstrength_cgs_to_SI
+    return data
+
+
+def make_sim_station(station_id, corsika, observer, channel_ids, weight=None, coreas_observer_format: bool = True):
     """
     creates an NuRadioReco sim station from the (interpolated) observer object of the coreas hdf5 file
 
@@ -137,6 +145,8 @@ def make_sim_station(station_id, corsika, observer, channel_ids, weight=None):
     channel_ids :
     weight : weight of individual station
         weight corresponds to area covered by station
+    coreas_observer_format: bool (defualt: True)
+        if `observer` argument is in the coreas cgs units and coordinates. If True, is passed to `coreas_observer_to_nrr_data` which switches x,y -> -y, x and converts to SI units. 
 
     Returns
     -------
@@ -148,16 +158,11 @@ def make_sim_station(station_id, corsika, observer, channel_ids, weight=None):
 
     if(observer is None):
         data = np.zeros((512, 4))
-        data[:, 0] = np.arange(0, 512) * units.ns / units.second
+        data[:, 0] = np.arange(0, 512) * units.ns 
+    elif coreas_observer_format:
+        data = observer_to_si_geomagnetic(observer)
     else:
         data = np.copy(observer)
-        data[:, 1], data[:, 2] = -observer[:, 2], observer[:, 1]
-
-    # convert to SI units
-    data[:, 0] *= units.second
-    data[:, 1] *= conversion_fieldstrength_cgs_to_SI
-    data[:, 2] *= conversion_fieldstrength_cgs_to_SI
-    data[:, 3] *= conversion_fieldstrength_cgs_to_SI
 
     cs = coordinatesystems.cstrafo(zenith, azimuth, magnetic_field_vector=magnetic_field_vector)
     efield = cs.transform_from_magnetic_to_geographic(data[:, 1:].T)
@@ -254,5 +259,4 @@ def make_sim_shower(corsika, observer=None, detector=None, station_id=None):
         if(not warning_printed_coreas_py):
             logger.warning("No high-level quantities in HDF5 file, not setting EM energy, this warning will be only printed once")
             warning_printed_coreas_py = True
-
     return sim_shower

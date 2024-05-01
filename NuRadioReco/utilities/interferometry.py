@@ -3,6 +3,9 @@ import sys
 from scipy import signal, constants
 from radiotools import helper as hp
 from NuRadioReco.utilities import units
+import logging
+logger = logging.getLogger('NuRadioReco.interferometry')
+
 
 # to convert V**2/m**2 * ns -> V**2/m**2 * s -> J/m**2 -> eV/m**2
 conversion_factor_integrated_signal = 1 / units.s * \
@@ -119,8 +122,8 @@ def interfere_traces_interpolation(target_pos, positions, traces, times, tab):
         idx = np.array(fidx, dtype=int)
 
         if not np.unique(idx).size == len(idx):
-            sys.exit(
-                "Index array has not unique entries. That is most probably a rounding issue!")
+            logger.error("Index array has not unique entries. That is most probably a rounding issue!")
+            sys.exit()
 
         f = (fidx - idx)[0]  # are all the same
 
