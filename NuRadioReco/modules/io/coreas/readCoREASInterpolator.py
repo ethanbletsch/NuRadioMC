@@ -91,10 +91,11 @@ class readCoREASInterpolator:
             position_coreas = observer.attrs['position']
             position_nr = np.array(
                 [-position_coreas[1], position_coreas[0], 0]) * units.cm
+            # TODO: read in z position from coreas, and pass core to showerplane transform. Almost noone uses the core option in CoREAS but it is cleaner to account for it
             starpos.append(position_nr)
 
             nrr_observer = coreas.observer_to_si_geomagnetic(observer)
-            trace_start.append(nrr_observer[0,0])
+            trace_start.append(nrr_observer[0, 0])
             signal = self.cs.transform_from_magnetic_to_geographic(
                 nrr_observer[:, 1:].T)
             signal = self.cs.transform_from_ground_to_onsky(signal)
