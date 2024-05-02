@@ -85,6 +85,8 @@ class efieldInterferometricDepthReco:
 
         if core is None:
             core = shower[shp.core]
+            if len(core) == 3:
+                core[2] = 0
 
         if axis is None:
             axis = hp.spherical_to_cartesian(
@@ -190,10 +192,8 @@ class efieldInterferometricDepthReco:
         signals = np.zeros(len(depths))
         for idx, depth in enumerate(depths):
             try:
-                # here z coordinate of core has to be the altitude of the
-                # observation_level
                 dist = self._at.get_distance_xmax_geometric(
-                    self._zenith, depth, observation_level=self._core[-1])
+                    self._zenith, depth, observation_level=self._shower[shp.observation_level])
             except ValueError:
                 logger.info(
                     "ValueError in get_distance_xmax_geometric, setting signal to 0")
@@ -479,18 +479,17 @@ class efieldInterferometricDepthReco:
                 if self._use_sim_pulses:
                     station = station.get_sim_station()
 
-                if det is not None:
-                    station_position = det.get_absolute_position(sid)
+                # if det is not None:
+                #     station_position = det.get_absolute_position(sid)
 
-                    positions_and_times_and_traces += [(station_position + np.mean([det.get_relative_position(sid, cid) for cid in electric_field.get_channel_ids()], axis=0),
-                                                        electric_field.get_times(),
-                                                        self._cs.transform_to_vxB_vxvxB(electric_field.get_trace())[0])
-                                                       for electric_field in station.get_electric_fields()]
-                else:
-                    positions_and_times_and_traces += [(electric_field.get_position(),
-                                                        electric_field.get_times(),
-                                                        self._cs.transform_to_vxB_vxvxB(electric_field.get_trace())[0])
-                                                       for electric_field in station.get_electric_fields()]
+                #     positions_and_times_and_traces += [(station_position + np.mean([det.get_relative_position(sid, cid) for cid in electric_field.get_channel_ids()], axis=0),
+                #                                         electric_field.get_times(),
+                #                                         self._cs.transform_to_vxB_vxvxB(electric_field.get_trace())[0])
+                #                                        for electric_field in station.get_electric_fields()]
+                positions_and_times_and_traces += [(electric_field.get_position(),
+                                                    electric_field.get_times(),
+                                                    self._cs.transform_to_vxB_vxvxB(electric_field.get_trace())[0])
+                                                   for electric_field in station.get_electric_fields()]
 
             for position, time, trace in positions_and_times_and_traces:
                 if self._use_sim_pulses and self._mc_jitter > 0:
@@ -513,6 +512,7 @@ class efieldInterferometricDepthReco:
 
         traces = np.array(traces)
         times = np.array(times)
+        logger.warning(f"Adding observation level to all positions. Makes sense for detector centered coordinate system (eg. LOFAR CS002 at approx. [0,0,0]) when reading the positions (here: {bool(self.det)}). When reading positions from efields ({not bool(det)}), ")
         pos = np.array(pos) + self._shower[shp.observation_level]
         assert not np.all(pos[:, :2] == 0)  # efield positions are set to [0, 0, 0] in voltageToEfieldConverter. This should protect against such behaviour.
 
