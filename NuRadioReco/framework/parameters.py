@@ -1,7 +1,7 @@
 """
 Provides an interface to store simulated and reconstructed quantities
 
-The parameters module provides access to store and read simulated or 
+The parameters module provides access to store and read simulated or
 reconstructed quantities in the different custom classes used in NuRadioMC.
 
 """
@@ -125,6 +125,21 @@ class showerParameters(Enum):
     interferometric_shower_maximum = 120  #: depth of the maximum of the longitudinal profile of the beam-formed signal
     interferometric_shower_axis = 121  #: shower axis (direction) derived from beam-formed signal
     interferometric_core = 122  #: core (intersection of shower axis with obs plane) derived from beam-formed signal
+
+
+class emitterParameters(Enum):
+    position = 1  #: the interaction vertex (for air showers this corresponds to the point of X0)
+    model = 2  #: the emitter model used to simulate the emission (as defined in NuRadioMC/SignalGen/emitter.py)
+    amplitude = 3  #: the amplitude of the signal
+    polarization = 4  #: the polarization of the signal
+    half_width = 5  #: the width of square and tone_burst signal
+    frequency = 6  #: the frequency of a signal (for cw and tone_burst model)
+    orientation_phi = 7  #: the orientation of the emiting antenna, defined via two vectors that are defined with two angles each
+    orientation_theta = 8  #: the orientation of the emiting antenna, defined via two vectors that are defined with two angles each
+    rotation_phi = 9  #: the orientation of the emiting antenna, defined via two vectors that are defined with two angles each
+    rotation_theta = 10  #: the orientation of the emiting antenna, defined via two vectors that are defined with two angles each
+    realization_id = 11  #: the id of the measurement of the emitted electric field
+
 
 class particleParameters(Enum):
     parent_id = 1 #: the entry number of the parent particle, None if primary.

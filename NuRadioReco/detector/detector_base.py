@@ -79,7 +79,6 @@ def buffer_db(in_memory, filename=None):
     table_channels = db.table('channels')
     table_channels.truncate()
     results = sqldet.get_everything_channels()
-    # TODO: add channel_group_id feature
     for channel in results:
         table_channels.insert({'station_id': channel['st.station_id'],
                                'channel_id': channel['ch.channel_id'],
@@ -141,7 +140,7 @@ class DetectorBase(object):
         is returned. To force the creation of a new detector instance, pass the additional keyword parameter
         `create_new=True` to this function. For more details, check the documentation for the
         `Singleton metaclass <NuRadioReco.utilities.html#NuRadioReco.utilities.metaclasses.Singleton>`_.
-        
+
         Parameters
         ----------
         source : str
@@ -209,6 +208,42 @@ class DetectorBase(object):
             logger.info("the correct antenna model will be determined automatically based on the depth of the antenna")
         self._antenna_by_depth = antenna_by_depth
 
+    @property
+    def assume_inf(self):
+        """
+        Getter function for the `assume_inf` attribute
+        """
+        return self.__assume_inf
+
+    @assume_inf.setter
+    def assume_inf(self, value):
+        """
+        Setter function for the `assume_inf` attribute. Checks whether new value is boolean before assigning
+        the value to the attribute.
+        """
+        if isinstance(value, bool):
+            self.__assume_inf = value
+        else:
+            raise ValueError(f"Value for assume_inf should be boolean, not {type(value)}")
+
+    @property
+    def antenna_by_depth(self):
+        """
+        Getter function for the `antenna_by_depth` attribute
+        """
+        return self._antenna_by_depth
+
+    @antenna_by_depth.setter
+    def antenna_by_depth(self, value):
+        """
+        Setter function for the `antenna_by_depth` attribute. Checks whether new value is boolean before assigning
+        the value to the attribute.
+        """
+        if isinstance(value, bool):
+            self.__assume_inf = value
+        else:
+            raise ValueError(f"Value for antenna_by_depth should be boolean, not {type(value)}")
+
     def __query_channel(self, station_id, channel_id):
         Channel = Query()
         if self.__current_time is None:
@@ -232,7 +267,7 @@ class DetectorBase(object):
         return self._channels.search((Channel.station_id == station_id)
                                      & (Channel.commission_time <= self.__current_time.datetime)
                                      & (Channel.decommission_time > self.__current_time.datetime))
-                                     
+
     def _query_devices(self, station_id):
         Device = Query()
         if self.__current_time is None:
@@ -306,13 +341,13 @@ class DetectorBase(object):
         if station_id not in self._buffered_stations.keys():
             self._buffer(station_id)
         return self._buffered_channels[station_id][channel_id]
-        
-        
+
+
     def __get_devices(self, station_id):
         if station_id not in self._buffered_stations.keys():
             self._buffer(station_id)
         return self._buffered_devices[station_id]
-        
+
     def __get_device(self, station_id, device_id):
         if station_id not in self._buffered_stations.keys():
             self._buffer(station_id)
@@ -334,7 +369,7 @@ class DetectorBase(object):
             self._buffered_devices[station_id][device['device_id']] = device
             self.__valid_t0 = max(self.__valid_t0, astropy.time.Time(channel['commission_time']))
             self.__valid_t1 = min(self.__valid_t1, astropy.time.Time(channel['decommission_time']))
-        
+
 
     def __buffer_position(self, position_id):
         self.__buffered_positions[position_id] = self.__query_position(position_id)
@@ -412,6 +447,7 @@ class DetectorBase(object):
             self.__current_time = astropy.time.Time(time)
         else:
             self.__current_time = time
+
         logger.info("updating detector time to {}".format(self.__current_time))
         if not ((self.__current_time > self.__valid_t0) and (self.__current_time < self.__valid_t1)):
             self._buffered_stations = {}
@@ -441,8 +477,8 @@ class DetectorBase(object):
         dict of channel parameters
         """
         return self.__get_channel(station_id, channel_id)
-        
-        
+
+
     def get_device(self, station_id, device_id):
         """
         returns a dictionary of all device parameters
@@ -531,11 +567,14 @@ class DetectorBase(object):
         -------
         3-dim array of relative station position
         """
-        if mode == 'channel': res = self.__get_channel(station_id, channel_id)
-        elif mode == 'device': res = self.__get_device(station_id, channel_id)
-        else: 
+        if mode == 'channel':
+            res = self.__get_channel(station_id, channel_id)
+        elif mode == 'device':
+            res = self.__get_device(station_id, channel_id)
+        else:
             logger.error("Mode {} does not exist. Use 'channel' or 'device'".format(mode))
             raise NameError
+
         return np.array([res['ant_position_x'], res['ant_position_y'], res['ant_position_z']])
 
     def get_site(self, station_id):
@@ -567,7 +606,8 @@ class DetectorBase(object):
             'auger': (-35.10, -69.55),
             'mooresbay': (-78.74, 165.09),
             'southpole': (-90., 0.),
-            'summit': (72.57, -38.46)
+            'summit': (72.57, -38.46),
+            'lofar': (52.92, 6.87)
         }
         site = self.get_site(station_id)
         if site in sites.keys():
@@ -640,10 +680,10 @@ class DetectorBase(object):
                             if np.sum(mask):
                                 parallel_antennas.append(channel_ids[mask])
         return np.array(parallel_antennas)
-        
-        
-        
-        
+
+
+
+
     def get_number_of_devices(self, station_id):
         """
         Get the number of devices per station
@@ -933,6 +973,32 @@ class DetectorBase(object):
             return -1
         else:
             return res['channel_group_id']
+        
+    def get_antenna_mode(self, station_id, channel_id):
+        """
+        returns the antenna mode of a given channel - this is specific to LOFAR antennae, as they operate in either inner or outer mode.
+
+        Parameters
+        ----------
+        station_id: int
+            the station id
+        channel_id: int
+            the channel id
+
+        Returns
+        -------
+        ant_mode : str
+            the antenna mode (LBA inner/outer)
+        """
+
+        res = self.__get_channel(station_id, channel_id)
+        if 'ant_mode' not in res.keys():
+            logger.warning(
+                'Antenna mode not set for channel {} in station {}, returning None'.format(
+                    channel_id, station_id))
+            return None
+        else:
+            return res['ant_mode']
 
     def get_noise_RMS(self, station_id, channel_id, stage='amp'):
         """
@@ -947,7 +1013,7 @@ class DetectorBase(object):
         stage: string (default 'amp')
             specifies the stage of reconstruction you want the noise RMS for,
             `stage` can be one of
-            
+
              * 'raw' (raw measured trace)
              * 'amp' (after the amp was deconvolved)
              * 'filt' (after the trace was highpass with 100MHz
