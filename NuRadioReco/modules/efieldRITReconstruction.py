@@ -80,35 +80,42 @@ class efieldInterferometricDepthReco:
 
     def set_geometry(self, shower: BaseShower, core: Optional[np.ndarray] = None,
                      axis: Optional[np.ndarray] = None, smear_angle_radians: float = 0, smear_core_meter: float = 0):
+
+        # protect against smearing of passed geometry
         assert not (core is not None and smear_core_meter != 0)
         assert not (axis is not None and smear_angle_radians != 0)
 
+        # set mc core if no core is given
         if core is None:
-            core = shower[shp.core]
-            if len(core) == 3:
-                core[2] = 0
+            core = np.array(shower[shp.core])
 
+        # ensure core is of shape (3,) with 0 as last coordinate
+        if len(core) == 3:
+            core[2] = 0
+        elif len(core) == 2:
+            core = np.hstack([core, 0])
+
+        # set mc axis if no axis is given
         if axis is None:
             axis = hp.spherical_to_cartesian(
                 shower[shp.zenith], shower[shp.azimuth])
 
+        # smearing
         if smear_core_meter:
             cs = coordinatesystems.cstrafo(
                 *hp.cartesian_to_spherical(*axis), shower[shp.magnetic_field_vector])
             core_vxB = np.random.normal((0, 0), smear_core_meter)
-            core = cs.transform_from_vxB_vxvxB_2D(core_vxB, core=core)
+            core = cs.transform_from_vxB_vxvxB_2D(core_vxB, core=core).flatten()
 
         if smear_angle_radians:
             concentration_parameter = 1 / smear_angle_radians**2
             dist = vonmises_fisher()
-            axis = dist.rvs(axis, concentration_parameter)
+            axis = dist.rvs(axis, concentration_parameter).flatten()
 
-        self._core = core.reshape((3,))
-        self._axis = axis.reshape((3,))
+        self._core = core
+        self._axis = axis
         self._zenith = hp.get_angle(np.array([0, 0, 1]), self._axis)
         self._shower = shower
-        assert np.round(
-            self._core[-1], 8) == np.round(shower[shp.observation_level], 8)
         self._cs = coordinatesystems.cstrafo(
             *hp.cartesian_to_spherical(*self._axis), shower[shp.magnetic_field_vector])
 
@@ -513,7 +520,7 @@ class efieldInterferometricDepthReco:
         traces = np.array(traces)
         times = np.array(times)
         logger.warning(f"Adding observation level to all positions. Makes sense for detector centered coordinate system (eg. LOFAR CS002 at approx. [0,0,0]) when reading the positions (here: {bool(self.det)}). When reading positions from efields ({not bool(det)}), ")
-        pos = np.array(pos) + self._shower[shp.observation_level]
+        pos = np.array(pos)
         assert not np.all(pos[:, :2] == 0)  # efield positions are set to [0, 0, 0] in voltageToEfieldConverter. This should protect against such behaviour.
 
         if self._signal_threshold > 0:
@@ -545,8 +552,12 @@ class efieldInterferometricDepthReco:
             cs_shower = coordinatesystems.cstrafo(
                 self._shower[shp.zenith], self._shower[shp.azimuth], magnetic_field_vector=self._shower[shp.magnetic_field_vector])
             logger.debug(f"self._positions shape: {self._positions.shape}")
+            mc_core = self._shower[shp.core]
+            if len(mc_core) == 2:
+                mc_core = np.hstack([mc_core, 0])
+            mc_core[2] = 0
             pos_showerplane = cs_shower.transform_to_vxB_vxvxB(
-                self._positions, core=self._shower[shp.core])
+                self._positions, core=mc_core)
             max_vxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 0]))
             max_vxvxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 1]))
             self._data["max_vxB_baseline"] = max_vxB_baseline_proxy * units.m
@@ -707,7 +718,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         zenith, azimuth = hp.cartesian_to_spherical(*axis)
 
         dist = self._at.get_distance_xmax_geometric(
-            zenith, depth, observation_level=core[-1])
+            zenith, depth, observation_level=self._shower[shp.observation_level])
         dr_ref_target = np.tan(self._angres) * dist
         p_axis = axis * dist + core
         return p_axis, dr_ref_target
@@ -730,8 +741,12 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             # we use the true core to make sure that it is within the inital search gri
             shower_axis = hp.spherical_to_cartesian(
                 self._shower[shp.zenith], self._shower[shp.azimuth])
+            mc_core = self._shower[shp.core]
+            if len(mc_core) == 2:
+                mc_core = np.hstack([mc_core, 0])
+            mc_core[2] = 0
             mc_at_plane = interferometry.get_intersection_between_line_and_plane(
-                axis, p_axis, shower_axis, self._shower[shp.core])
+                axis, p_axis, shower_axis, mc_core)
             # gives interserction between a plane normal to the shower axis initial guess (shower_axis_inital)
             # anchored at a point in this vB plane at the requested height/depth along the initial axis (p_axis),
             # with the true/montecarlo shower axis anchored at the true/mc core
