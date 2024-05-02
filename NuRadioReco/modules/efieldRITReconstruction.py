@@ -519,7 +519,7 @@ class efieldInterferometricDepthReco:
 
         traces = np.array(traces)
         times = np.array(times)
-        logger.warning(f"Adding observation level to all positions. Makes sense for detector centered coordinate system (eg. LOFAR CS002 at approx. [0,0,0]) when reading the positions (here: {bool(self.det)}). When reading positions from efields ({not bool(det)}), ")
+        logger.warning(f"Adding observation level to all positions. Makes sense for detector centered coordinate system (eg. LOFAR CS002 at approx. [0,0,0]) when reading the positions (here: {bool(det)}). When reading positions from efields ({not bool(det)}), ")
         pos = np.array(pos)
         assert not np.all(pos[:, :2] == 0)  # efield positions are set to [0, 0, 0] in voltageToEfieldConverter. This should protect against such behaviour.
 
