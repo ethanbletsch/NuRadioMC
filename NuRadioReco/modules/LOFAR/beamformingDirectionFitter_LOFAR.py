@@ -230,5 +230,11 @@ class beamformingDirectionFitter:
             station.set_parameter(stationParameters.cr_zenith, station.get_parameter(stationParameters.zenith))
             station.set_parameter(stationParameters.cr_azimuth, station.get_parameter(stationParameters.azimuth))
 
+            # Set mean shower axis to radio shower reconstructed axis
+            axis = np.mean([hp.spherical_to_cartesian(station[stationParameters.cr_zenith], station[stationParameters.cr_azimuth]).flatten() for station in event.get_stations()], axis=0)
+            zenith, azimuth = hp.cartesian_to_spherical(*axis)
+            event.get_first_shower().set_parameter(showerParameters.zenith, zenith)
+            event.get_first_shower().set_parameter(showerParameters.azimuth, azimuth)
+
     def end(self):
         pass
