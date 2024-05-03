@@ -576,7 +576,7 @@ class readLOFARData:
         station_ids = []
         for station_name, station_dict in self.__stations.items():
             station_id = int(station_name[2:])
-            station_id.append(station_id)
+            station_ids.append(station_id)
             station_files = station_dict['files']
 
             if len(station_files) == 0:
