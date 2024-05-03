@@ -505,11 +505,19 @@ class readLOFARData:
         zenith = math.remainder(lora_dict["LORA"]["zenith_rad"], 2 * np.pi)
         azimuth = math.remainder(lora_dict["LORA"]["azimuth_rad"], 2 * np.pi)
 
+        # Read in corg and store as 2d array
+        core = np.array([lora_dict["LORA"]["core_x_m"], lora_dict["LORA"]["core_y_m"]]) * units.m
+
+        # Read in energy
+        energy = lora_dict["LORA"]["energy_GeV"] * units.GeV
+
         # The LORA coordinate system has x pointing East -> set this through magnetic field vector (values from 2015)
         self.__hybrid_shower.set_parameter(showerParameters.magnetic_field_vector,
                                            np.array([0.004675, 0.186270, -0.456412]))
         self.__hybrid_shower.set_parameter(showerParameters.zenith, zenith * units.radian)
         self.__hybrid_shower.set_parameter(showerParameters.azimuth, azimuth * units.radian)
+        self.__hybrid_shower.set_parameter(showerParameters.core, core)
+        self.__hybrid_shower.set_parameter(showerParameters.energy, energy)
 
         # Go through TBB directory and identify all files for this event
         tbb_filename_pattern = tbb_filetag_from_unix(self.__lora_timestamp)
@@ -565,8 +573,10 @@ class readLOFARData:
         detector.update(time)
 
         # Add all Detector stations to Event
+        station_ids = []
         for station_name, station_dict in self.__stations.items():
             station_id = int(station_name[2:])
+            station_id.append(station_id)
             station_files = station_dict['files']
 
             if len(station_files) == 0:
@@ -577,8 +587,6 @@ class readLOFARData:
             
             station = NuRadioReco.framework.station.Station(station_id)
             station.set_station_time(time)
-            radio_shower = NuRadioReco.framework.radio_shower.RadioShower(shower_id=station_id,
-                                                                          station_ids=[station_id])
 
             # Use KRATOS io functions to access trace
             lofar_trace_access = getLOFARtraces(
@@ -650,9 +658,12 @@ class readLOFARData:
 
             # Add station to Event, together with RadioShower to store reconstruction values later on
             evt.set_station(station)
-            evt.add_shower(radio_shower)
 
             lofar_trace_access.close_file()
+
+        radio_shower = NuRadioReco.framework.radio_shower.RadioShower(shower_id=station_id, station_ids=station_ids)
+        radio_shower.set_parameter(showerParameters.observation_level, 760*units.cm)
+        evt.add_shower(radio_shower)
 
         yield evt
 
