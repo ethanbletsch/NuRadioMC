@@ -230,8 +230,25 @@ class beamformingDirectionFitter:
             station.set_parameter(stationParameters.cr_zenith, station.get_parameter(stationParameters.zenith))
             station.set_parameter(stationParameters.cr_azimuth, station.get_parameter(stationParameters.azimuth))
 
+            # Unfold one last time to have the best electric field
+            station.set_electric_fields([])
+            for ant in good_antennas:
+                converter.run(event, station, detector, use_channels=ant)
+
+            for field in station.get_electric_fields():
+                # Force the Efields to have the same start time as voltage traces
+                field.set_trace_start_time(0)
+
+                # Set the Efield position attribute
+                field.set_position(
+                    detector.get_absolute_position(station.get_id()) +
+                    detector.get_relative_position(station.get_id(), field.get_channel_ids()[0])
+                )
+
             # Set mean shower axis to radio shower reconstructed axis
-            axis = np.mean([hp.spherical_to_cartesian(station[stationParameters.cr_zenith], station[stationParameters.cr_azimuth]).flatten() for station in event.get_stations()], axis=0)
+            axis = np.mean([hp.spherical_to_cartesian(station[stationParameters.cr_zenith],
+                                                      station[stationParameters.cr_azimuth]).flatten()
+                            for station in event.get_stations()], axis=0)
             zenith, azimuth = hp.cartesian_to_spherical(*axis)
             event.get_first_shower().set_parameter(showerParameters.zenith, zenith)
             event.get_first_shower().set_parameter(showerParameters.azimuth, azimuth)
