@@ -50,8 +50,7 @@ class readCoREASInterpolator:
         """
         self.corsika = h5py.File(filename)
         self.coreas_shower = coreas.make_sim_shower(self.corsika)
-        self.coreas_shower.set_parameter(
-            shp.core, [0., 0., self.coreas_shower[shp.observation_level]])
+        self.coreas_shower.set_parameter(shp.core, np.zeros(3))
         self.cs = cstrafo(*coreas.get_angles(self.corsika))
         self.sampling_period = self.corsika["CoREAS"].attrs["TimeResolution"] * units.s
 
@@ -166,8 +165,7 @@ class readCoREASInterpolator:
             chan_positions_ground_shifted = np.vstack(
                 [pos for pos in chan_positions_ground_per_groupid_shifted.values()])
 
-            chan_positions_vxB_shifted = self.cs.transform_to_vxB_vxvxB(
-                chan_positions_ground_shifted, self.coreas_shower[shp.core])
+            chan_positions_vxB_shifted = self.cs.transform_to_vxB_vxvxB(chan_positions_ground_shifted)
             chan_positions_vxB_per_groupid_shifted = {}
             for group_id, pos in zip(chan_id_per_groupid.keys(), chan_positions_vxB_shifted):
                 chan_positions_vxB_per_groupid_shifted[group_id] = pos
@@ -189,14 +187,13 @@ class readCoREASInterpolator:
                         timeseries = np.zeros((3, self.signals.shape[-2]))
                         trace_start_time = self.signal_interpolator.interpolators_arrival_times(*position[:-1])
                     else:
-                        timeseries, trace_start_time, _, _= self.signal_interpolator(
+                        timeseries, trace_start_time, _, _ = self.signal_interpolator(
                             *position[:-1],
                             lowfreq=self.lowfreq / units.MHz,
                             highfreq=self.highfreq / units.MHz,
-                            account_for_timing = True,
-                            pulse_centered = True,
-                            full_output = True
-                            )
+                            account_for_timing=True,
+                            pulse_centered=True,
+                            full_output=True)
                         timeseries = timeseries.T
                         timeseries = np.vstack([np.zeros_like(timeseries[0]), *timeseries]) # add r polarization back to trace, as zeroes
                     efields[group_id] = self.cs.transform_from_onsky_to_ground(
@@ -218,8 +215,7 @@ class readCoREASInterpolator:
 
             evt.set_station(stat)
 
-        self.coreas_shower.set_parameter(
-            shp.core, np.array([0., 0., self.coreas_shower[shp.observation_level]]) + core_shift)
+        self.coreas_shower.set_parameter(core_shift)
         evt.add_sim_shower(self.coreas_shower)
         return evt
 
@@ -270,7 +266,6 @@ def make_sim_station(station_id,
     assert (efields is not None) or (fluences is not None)
 
     zenith, azimuth, magnetic_field_vector = coreas.get_angles(corsika)
-    cs = cstrafo(zenith, azimuth, magnetic_field_vector=magnetic_field_vector)
 
     # prepend trace with zeros to not have the pulse directly at the start
     sim_station_ = sim_station.SimStation(station_id)
