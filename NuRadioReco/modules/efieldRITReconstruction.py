@@ -156,7 +156,7 @@ class efieldInterferometricDepthReco:
         self._use_sim_pulses = use_sim_pulses
 
         self.set_geometry(shower, core, axis)
-        self.update_atmospheric_model_and_refractivity_table(shower)
+        self.update_atmospheric_model_and_refractivity_table()
 
     def sample_longitudinal_profile(self, depths: np.ndarray):
         """
@@ -393,13 +393,13 @@ class efieldInterferometricDepthReco:
             xrit = rit_parameters[1]
             ax = plt.figure().add_subplot()
             ax.scatter(self._depths, signals_tmp, color="blue",
-                       label="signals_tmp", s=2, zorder=1.1)
+                       label="Coarse sampling", s=2, zorder=1.1)
             ax.scatter(depths_final, signals_final, color="red",
-                       label="signals_final", s=2, zorder=1)
+                       label="Fine sampling", s=2, zorder=1)
             ax.plot(depths_final, normal(depths_final, *rit_parameters),
-                    label="gauss fit", color="black", ls="--")
+                    label="Gaussian fit", color="black", ls="--")
             ax.axvline(rit_parameters[1])
-            ax.set_xlabel("slant depth [g/cm2]")
+            ax.set_xlabel(r"$X [\mathrm{g}/\mathrm{cm}^2]")
             ax.set_ylabel(self._signal_kind)
             ax.legend()
             plt.show()
@@ -411,8 +411,7 @@ class efieldInterferometricDepthReco:
     def end(self):
         pass
 
-    def update_atmospheric_model_and_refractivity_table(
-            self, shower: BaseShower):
+    def update_atmospheric_model_and_refractivity_table(self):
         """
         Updates model of the atmosphere and tabulated, integrated refractive index according to shower properties.
 
@@ -425,21 +424,26 @@ class efieldInterferometricDepthReco:
             "flat earth geometry assumed. default was curved. If issue has been fixed, consider moving back to curved")
         curved = False
 
+        try:
+            atmospheric_model = self._shower[shp.atmospheric_model]
+        except KeyError:
+            logger.warning("Shower does contain showerParameters.atmospheric_model (likely not a sim shower). Setting model 17 (US standard, Keilhauer)")
+            atmospheric_model = 17
         if self._at is None:
             self._at = models.Atmosphere(
-                shower[shp.atmospheric_model], curved=curved)
+                atmospheric_model, curved=curved)
             self._tab = refractivity.RefractivityTable(
-                self._at.model, refractivity_at_sea_level=shower[shp.refractive_index_at_ground] - 1, curved=curved)
+                self._at.model, refractivity_at_sea_level=self._shower[shp.refractive_index_at_ground] - 1, curved=curved)
 
-        elif self._at.model != shower[shp.atmospheric_model]:
+        elif self._at.model != atmospheric_model:
             self._at = models.Atmosphere(
-                shower[shp.atmospheric_model], curved=curved)
+                atmospheric_model, curved=curved)
             self._tab = refractivity.RefractivityTable(
-                self._at.model, refractivity_at_sea_level=shower[shp.refractive_index_at_ground] - 1, curved=curved)
+                self._at.model, refractivity_at_sea_level=self._shower[shp.refractive_index_at_ground] - 1, curved=curved)
 
-        elif self._tab._refractivity_at_sea_level != shower[shp.refractive_index_at_ground] - 1:
+        elif self._tab._refractivity_at_sea_level != self._shower[shp.refractive_index_at_ground] - 1:
             self._tab = refractivity.RefractivityTable(
-                self._at.model, refractivity_at_sea_level=shower[shp.refractive_index_at_ground] - 1, curved=curved)
+                self._at.model, refractivity_at_sea_level=self._shower[shp.refractive_index_at_ground] - 1, curved=curved)
 
     def set_station_data(self, evt: Event, det: Optional[DetectorBase], station_ids: Optional[list] = None):
         """
@@ -465,7 +469,7 @@ class efieldInterferometricDepthReco:
 
         if self._use_channels:
             dominant_polarisations = [evt.get_station(sid)[stp.cr_dominant_polarisation] for sid in station_ids if self._use_channels]
-            unique, counts = np.unique(dominant_polarisations)
+            unique, counts = np.unique(dominant_polarisations, axis=0, return_counts=True)
             strongest_pol_overall = unique[np.argmax(counts)]
 
             positions_and_times_and_traces = []
@@ -477,7 +481,7 @@ class efieldInterferometricDepthReco:
                                                     station.get_channel(cid).get_times(),
                                                     station.get_channel(cid).get_trace())
                                                    for cid in station.get_channel_ids()
-                                                   if det.get_antenna_orientation(sid, cid) == strongest_pol_overall]
+                                                   if np.all(np.abs(det.get_antenna_orientation(sid, cid) - strongest_pol_overall) < 1e-6)]
         else:
             positions_and_times_and_traces = []
             for sid in station_ids:
@@ -497,47 +501,48 @@ class efieldInterferometricDepthReco:
                                                     electric_field.get_times(),
                                                     self._cs.transform_to_vxB_vxvxB(electric_field.get_trace())[0])
                                                    for electric_field in station.get_electric_fields()]
+        for position, time, trace in positions_and_times_and_traces:
+            if self._use_sim_pulses and self._mc_jitter > 0:
+                time += np.random.normal(scale=self._mc_jitter)
+            if self._nsampling is not None:
+                hw = self._nsampling // 2
+                m = np.argmax(np.abs(trace))
 
-            for position, time, trace in positions_and_times_and_traces:
-                if self._use_sim_pulses and self._mc_jitter > 0:
-                    time += np.random.normal(scale=self._mc_jitter)
-                if self._nsampling is not None:
-                    hw = self._nsampling // 2
-                    m = np.argmax(np.abs(trace))
+                if m < hw:
+                    m = hw
+                if m > len(trace) - hw:
+                    m = len(trace) - hw
 
-                    if m < hw:
-                        m = hw
-                    if m > len(trace) - hw:
-                        m = len(trace) - hw
+                trace = trace[m - hw:m + hw]
+                time = time[m - hw:m + hw]
 
-                    trace = trace[m - hw:m + hw]
-                    time = time[m - hw:m + hw]
-
-                traces.append(trace)
-                times.append(time)
-                pos.append(position)
+            traces.append(trace)
+            times.append(time)
+            pos.append(position)
 
         traces = np.array(traces)
         times = np.array(times)
-        logger.warning(f"Adding observation level to all positions. Makes sense for detector centered coordinate system (eg. LOFAR CS002 at approx. [0,0,0]) when reading the positions (here: {bool(det)}). When reading positions from efields ({not bool(det)}), ")
         pos = np.array(pos)
         assert not np.all(pos[:, :2] == 0)  # efield positions are set to [0, 0, 0] in voltageToEfieldConverter. This should protect against such behaviour.
 
-        if self._signal_threshold > 0:
-            flu = np.sum(traces ** 2, axis=-1)
-            mask = (flu >= self._signal_threshold * np.max(flu))
-            logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)}% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
+        flu = np.sum(traces ** 2, axis=-1)
+        mask = (flu >= self._signal_threshold * np.max(flu))
+        logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)}% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
 
-            if self._debug:
-                ax = plt.figure().add_subplot()
-                import matplotlib as mpl
-                cmap = mpl.colormaps.get_cmap("viridis")
-                ax.scatter(*(pos[mask].T[:2, :]), c=flu[mask], cmap=cmap, s=1)
-                ax.scatter(*(pos[~mask].T[:2, :]), c="red",
-                           s=1, marker="x", label="excluded")
-                ax.set_aspect("equal")
-                ax.legend()
-                plt.show()
+        if self._debug:
+            ax = plt.figure().add_subplot()
+            import matplotlib as mpl
+            cmap = mpl.colormaps.get_cmap("viridis")
+            ax.scatter(*(pos[mask].T[:2, :]), c=flu[mask], cmap=cmap, s=1)
+            ax.scatter(*(pos[~mask].T[:2, :]), c="red",
+                       s=1, marker="x", label="excluded")
+            ax.set_xlabel(r"$x_\mathrm{ground}~[\mathrm{m}]$")
+            ax.set_ylabel(r"$y_\mathrm{ground}~[\mathrm{m}]$")
+            ax.spines[["top", "right"]].set_visible(True)
+            ax.tick_params(top=True, right=True)
+            ax.set_aspect("equal")
+            ax.legend()
+            plt.show()
 
             traces = traces[mask]
             times = times[mask]
@@ -631,7 +636,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
         self.set_geometry(shower, core=core, axis=axis, smear_angle_radians=axis_spread *
                           units.radian, smear_core_meter=core_spread / units.m)
-        self.update_atmospheric_model_and_refractivity_table(shower)
+        self.update_atmospheric_model_and_refractivity_table()
 
     def find_maximum_in_plane(self, xs_showerplane, ys_showerplane, p_axis, cs):
         """
@@ -762,10 +767,13 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                                f"Consider increasing cross section size by at least a factor {max_mc_vB_coordinate / max_dist: .2f}, since this warning will not appear for real data;)")
                 max_dist = np.max(np.abs(mc_vB)) + initial_grid_spacing
 
-        xlims = np.array([-max_dist, max_dist]) + np.random.uniform(-0.1 *
-                                                                    initial_grid_spacing, 0.1 * initial_grid_spacing, 2)
-        ylims = np.array([-max_dist, max_dist]) + np.random.uniform(-0.1 *
-                                                                    initial_grid_spacing, 0.1 * initial_grid_spacing, 2)
+        xlims = np.array([-max_dist, max_dist])
+        ylims = np.array([-max_dist, max_dist])
+
+        if self._use_sim_pulses:
+            xlims += np.random.uniform(-0.1 * initial_grid_spacing, 0.1 * initial_grid_spacing, 2)
+            ylims += np.random.uniform(-0.1 * initial_grid_spacing, 0.1 * initial_grid_spacing, 2)
+
         xs = np.arange(xlims[0], xlims[1] +
                        initial_grid_spacing, initial_grid_spacing)
         ys = np.arange(ylims[0], ylims[1] +
@@ -781,8 +789,13 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             sh.append(signals)
 
             if self._debug:
+                if self._use_sim_pulses:
+                    axis0_intersect_vB = mc_vB
+                else:
+                    axis0_intersect_vB = np.zeros(2)
+
                 plot_lateral_cross_section(
-                    xs, ys, signals, mc_vB, title=r"%.1f$\,$g$\,$cm$^{-2}$" % depth)
+                    xs, ys, signals, axis0_intersect_vB, title=r"%.1f$\,$g$\,$cm$^{-2}$" % depth, is_mc=self._use_sim_pulses)
             iloop += 1
 
             # maximum
@@ -1073,7 +1086,7 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         self._lateral_vxB_width = lateral_vxB_width
 
         self.set_geometry(shower, core=core, axis=axis)
-        self.update_atmospheric_model_and_refractivity_table(shower)
+        self.update_atmospheric_model_and_refractivity_table()
 
     def get_lateral_profile(self, p_axis: np.ndarray, xs: np.ndarray):
         signals = np.zeros(len(xs))
@@ -1280,7 +1293,7 @@ def plot_shower_axis_points(points: np.ndarray, weights: np.ndarray, shower: Opt
 
 
 def plot_lateral_cross_section(
-        xs, ys, signals, mc_pos=None, fname=None, title=None):
+        xs, ys, signals, mc_pos=None, fname=None, title=None, is_mc: bool = False):
     """
     Plot the lateral distribution of the beamformed singal (in the vxB, vxvxB directions).
 
@@ -1300,10 +1313,13 @@ def plot_lateral_cross_section(
         Intersection of the (MC-)axis with the "slice" of the lateral distribution plotted.
 
     fname : str
-        Name of the figure. If given the figure is saved, if fname is None the fiture is shown.
+        Name of the figure. If given the figure is saved, if fname is None the figure is shown.
 
     title : str
         Title of the figure (Default: None)
+
+    is_mc: bool (default=False)
+        Modifes label of mc_pos to mean intersect of initial guess with lateral section, necessarily zero.
     """
 
     yy, xx = np.meshgrid(ys, xs)
@@ -1312,7 +1328,7 @@ def plot_lateral_cross_section(
     pcm = ax.pcolormesh(xx, yy, signals, shading='gouraud')
     ax.scatter(xx, yy, s=2, color="k", facecolors="none", lw=0.5)
     cbi = plt.colorbar(pcm, pad=0.02)
-    cbi.set_label(r"$f_{B_{j}}$ / eV$\,$m$^{-2}$")
+    cbi.set_label(r"$f_{B_{j}}$ [eV$\,$m$^{-2}$]")
 
     idx = np.argmax(signals)
     xfound = xs[int(idx // len(ys))]
@@ -1320,12 +1336,16 @@ def plot_lateral_cross_section(
 
     ax.scatter(xfound, yfound, s=2, color="blue", label="Max")
     if mc_pos is not None:
-        ax.scatter(*mc_pos[:2], marker="*", color="red", label=r"intersection with $\hat{a}_\mathrm{MC}$", s=2)
+        if is_mc:
+            label = r"Intersection $\hat{a}_\mathrm{MC}$"
+        else:
+            label = r"Intersection $\hat{a}_0$"
+        ax.scatter(*mc_pos[:2], marker="*", color="red", label=label, s=2)
 
     ax.legend()
     ax.set_ylabel(
-        r"$\vec{v} \times \vec{v} \times \vec{B}$ / m")
-    ax.set_xlabel(r"$\vec{v} \times \vec{B}$ / m")
+        r"$\mathbf{v} \times \mathbf{v} \times \mathbf{B}$ [m]")
+    ax.set_xlabel(r"$\mathbf{v} \times \mathbf{B}$ [m]")
     if title is not None:
         ax.set_title(title)  # r"slant depth = %d g / cm$^2$" % depth)
 
