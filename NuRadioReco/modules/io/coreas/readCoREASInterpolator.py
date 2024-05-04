@@ -138,6 +138,8 @@ class readCoREASInterpolator:
 
         evt = event.Event(0, 0)
         core_shift = np.append(core_xy, [0.])
+        self.coreas_shower.set_parameter(shp.core, core_shift)
+
         if station_ids is None:
             station_ids = det.get_station_ids()
 
@@ -156,33 +158,28 @@ class readCoREASInterpolator:
             station_position_ground = det.get_absolute_position(station_id)
 
             chan_positions_ground_per_groupid = {}
-            chan_positions_ground_per_groupid_shifted = {}
             for group_id, assoc_channel_ids in chan_id_per_groupid.items():
                 chan_positions_ground_per_groupid[group_id] = station_position_ground + det.get_relative_position(
                     station_id, assoc_channel_ids[0])
-                chan_positions_ground_per_groupid_shifted[group_id] = chan_positions_ground_per_groupid[group_id] - core_shift
 
-            chan_positions_ground_shifted = np.vstack(
-                [pos for pos in chan_positions_ground_per_groupid_shifted.values()])
+            chan_positions_ground = np.vstack([pos for pos in chan_positions_ground_per_groupid.values()])
 
-            chan_positions_vxB_shifted = self.cs.transform_to_vxB_vxvxB(chan_positions_ground_shifted)
-            chan_positions_vxB_per_groupid_shifted = {}
-            for group_id, pos in zip(chan_id_per_groupid.keys(), chan_positions_vxB_shifted):
-                chan_positions_vxB_per_groupid_shifted[group_id] = pos
+            chan_positions_vxB = self.cs.transform_to_vxB_vxvxB(chan_positions_ground, core=self.coreas_shower[shp.core])
+            chan_positions_vxB_per_groupid = {}
+            for group_id, pos in zip(chan_id_per_groupid.keys(), chan_positions_vxB):
+                chan_positions_vxB_per_groupid[group_id] = pos
 
             # flattened_positions = np.vstack(
             #     [pos for pos in chan_positions_vxB_per_groupid.values()])
-            contained = position_contained_in_starshape(chan_positions_vxB_shifted, self.starshape_showerplane)
+            contained = position_contained_in_starshape(chan_positions_vxB, self.starshape_showerplane)
             if np.any(~contained):
-                logger.warning(
-                    "Channel positions are not all contained in the starshape! Will extrapolate."
-                )
+                logger.warning("Channel positions are not all contained in the starshape! Traces outside startshape are flat.")
 
             stat = station.Station(station_id)
             if self.kind == "trace":
                 efields = {}
                 trace_start = {}
-                for idx, (group_id, position) in enumerate(chan_positions_vxB_per_groupid_shifted.items()):
+                for idx, (group_id, position) in enumerate(chan_positions_vxB_per_groupid.items()):
                     if not contained[idx]:
                         timeseries = np.zeros((3, self.signals.shape[-2]))
                         trace_start_time = self.signal_interpolator.interpolators_arrival_times(*position[:-1])
@@ -207,7 +204,7 @@ class readCoREASInterpolator:
 
             elif self.kind == "fluence":
                 fluences = {}
-                for group_id, position in chan_positions_vxB_per_groupid_shifted.items():
+                for group_id, position in chan_positions_vxB_per_groupid.items():
                     fluences[group_id] = self.signal_interpolator(*position[:-1])
                 sim_stat = make_sim_station(
                     station_id, self.corsika, chan_id_per_groupid, chan_positions_ground_per_groupid, fluences=fluences)
@@ -215,7 +212,6 @@ class readCoREASInterpolator:
 
             evt.set_station(stat)
 
-        self.coreas_shower.set_parameter(core_shift)
         evt.add_sim_shower(self.coreas_shower)
         return evt
 
