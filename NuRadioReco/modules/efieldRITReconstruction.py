@@ -74,7 +74,7 @@ class efieldInterferometricDepthReco:
         self._cs = None
         self._shower = None
         self._zenith = None
-        self._nsampling = None
+        self._window = None
         self._use_sim_pulses = None
         self._data = {}
 
@@ -123,7 +123,7 @@ class efieldInterferometricDepthReco:
               shower: BaseShower,
               core: Optional[np.ndarray] = None,
               axis: Optional[np.ndarray] = None,
-              n_sampling: int = 256,
+              window: float = 256 * 0.1 * units.ns,
               use_sim_pulses: bool = False,
               use_channels: bool = False,
               debug: bool = False):
@@ -151,7 +151,7 @@ class efieldInterferometricDepthReco:
 
         """
         self._debug = debug
-        self._nsampling = n_sampling
+        self._window = window
         self._use_channels = use_channels
         self._use_sim_pulses = use_sim_pulses
 
@@ -427,7 +427,7 @@ class efieldInterferometricDepthReco:
         try:
             atmospheric_model = self._shower[shp.atmospheric_model]
         except KeyError:
-            logger.warning("Shower does contain showerParameters.atmospheric_model (likely not a sim shower). Setting model 17 (US standard, Keilhauer)")
+            logger.warning("Shower doesn't contain showerParameters.atmospheric_model (likely not a sim shower). Setting model 17 (US standard, Keilhauer)")
             atmospheric_model = 17
         if self._at is None:
             self._at = models.Atmosphere(
@@ -479,7 +479,8 @@ class efieldInterferometricDepthReco:
                 positions_and_times_and_traces += [((station_position
                                                      + det.get_relative_position(sid, cid)),
                                                     station.get_channel(cid).get_times(),
-                                                    station.get_channel(cid).get_trace())
+                                                    station.get_channel(cid).get_trace(),
+                                                    sid, det.get_channel_group_id(sid, cid))
                                                    for cid in station.get_channel_ids()
                                                    if np.all(np.abs(det.get_antenna_orientation(sid, cid) - strongest_pol_overall) < 1e-6)]
         else:
@@ -499,26 +500,43 @@ class efieldInterferometricDepthReco:
                 #                                        for electric_field in station.get_electric_fields()]
                 positions_and_times_and_traces += [(electric_field.get_position(),
                                                     electric_field.get_times(),
-                                                    self._cs.transform_to_vxB_vxvxB(electric_field.get_trace())[0])
+                                                    self._cs.transform_to_vxB_vxvxB(electric_field.get_trace())[0],
+                                                    sid,
+                                                    det.get_channel_group_id(sid, electric_field.get_channel_ids()[0]))
                                                    for electric_field in station.get_electric_fields()]
-        for position, time, trace in positions_and_times_and_traces:
+
+        debug_sids = [2, 3, 6, 7]
+        debug_cgids = [det.get_channel_group_id(sid, det.get_channel_ids(sid)[0]) for sid in debug_sids]
+        debug_times = []
+        debug_traces = []
+
+        self._tstep = positions_and_times_and_traces[0][1][1] - positions_and_times_and_traces[0][1][0]
+        for position, time, trace, sid, cgid in positions_and_times_and_traces:
             if self._use_sim_pulses and self._mc_jitter > 0:
                 time += np.random.normal(scale=self._mc_jitter)
-            if self._nsampling is not None:
-                hw = self._nsampling // 2
-                m = np.argmax(np.abs(trace))
 
-                if m < hw:
-                    m = hw
-                if m > len(trace) - hw:
-                    m = len(trace) - hw
+            # select window around argmax of trace
+            nsampling = int(self._window / self._tstep)
+            hw = nsampling // 2
+            m = np.argmax(np.abs(trace))
 
-                trace = trace[m - hw:m + hw]
-                time = time[m - hw:m + hw]
+            if m < hw:
+                logger.warning("Trace max close to early edge.")
+                m = hw
+            if m > len(trace) - hw:
+                logger.warning("Trace max close to late edge.")
+                m = len(trace) - hw
+
+            trace = trace[m - hw:m + hw]
+            time = time[m - hw:m + hw]
 
             traces.append(trace)
             times.append(time)
             pos.append(position)
+
+            if sid in debug_sids and cgid in debug_cgids:
+                debug_times.append(time)
+                debug_traces.append(trace)
 
         traces = np.array(traces)
         times = np.array(times)
@@ -530,27 +548,42 @@ class efieldInterferometricDepthReco:
         logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)}% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
 
         if self._debug:
-            ax = plt.figure().add_subplot()
-            import matplotlib as mpl
-            cmap = mpl.colormaps.get_cmap("viridis")
-            ax.scatter(*(pos[mask].T[:2, :]), c=flu[mask], cmap=cmap, s=1)
-            ax.scatter(*(pos[~mask].T[:2, :]), c="red",
-                       s=1, marker="x", label="excluded")
-            ax.set_xlabel(r"$x_\mathrm{ground}~[\mathrm{m}]$")
-            ax.set_ylabel(r"$y_\mathrm{ground}~[\mathrm{m}]$")
-            ax.spines[["top", "right"]].set_visible(True)
-            ax.tick_params(top=True, right=True)
-            ax.set_aspect("equal")
-            ax.legend()
+            fig = plt.figure()
+            gs = gridspec.GridSpec(len(debug_sids), 3, figure=fig, width_ratios=[.05, 1, 0.6], height_ratios=np.ones_like(debug_sids))
+            ax_footprint = fig.add_subplot(gs[:, 1])
+            cmap = plt.cm.viridis
+            sm = ax_footprint.scatter(*(pos[mask].T[:2, :]), c=flu[mask], cmap=cmap, s=1)
+            cax = fig.add_subplot(gs[:, 0])
+            cb = colorbar.Colorbar(cax, sm, label="Fluence")
+            cb.ax.set_yticklabels([])
+            ax_footprint.scatter(*(pos[~mask].T[:2, :]), c="red", s=1, marker="x", label="Excluded")
+            ax_footprint.set_xlabel(r"$x_\mathrm{ground}~[\mathrm{m}]$")
+            ax_footprint.set_ylabel(r"$y_\mathrm{ground}~[\mathrm{m}]$")
+            ax_footprint.spines[["top", "right"]].set_visible(True)
+            ax_footprint.tick_params(top=True, right=True)
+            ax_footprint.set_aspect("equal")
+            ax_footprint.legend()
+
+            axes_trace = []
+            ax = None
+            for i in range(len(debug_sids)):
+                ax = fig.add_subplot(gs[i, 2], sharex=ax)
+                axes_trace.append(ax)
+                trace = debug_traces[i] / units.eV * units.m
+                time = debug_times[i] / units.ns
+                ax.plot(time, trace, color="navy", lw=.6)
+                ax.tick_params(labelsize="x-small")
+            axes_trace[-1].set_xlabel(r"$t$ [ns]")
+            axes_trace[1].set_ylabel(r"$E_{\mathbf{v}\times\mathbf{B}}$ [eV/m]")
+
             plt.show()
 
-            traces = traces[mask]
-            times = times[mask]
-            pos = pos[mask]
+        traces = traces[mask]
+        times = times[mask]
+        pos = pos[mask]
 
         self._traces = traces
         self._times = times
-        self._tstep = self._times[0, 1] - self._times[0, 0]
         self._positions = pos
 
         if self._use_sim_pulses:
@@ -582,7 +615,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
               shower: BaseShower,
               core: Optional[np.ndarray] = None,
               axis: Optional[np.ndarray] = None,
-              n_sampling: int = 256,
+              window: float = 256 * 0.1 * units.ns,
               use_sim_pulses: bool = False,
               use_channels: bool = False,
               core_spread: float = 10 * units.m,
@@ -619,7 +652,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         """
         self._debug = debug
         self._refine_axis = refine_axis
-        self._nsampling = n_sampling
+        self._window = window
         self._use_sim_pulses = use_sim_pulses
         self._use_channels = use_channels
         self._multiprocessing = multiprocessing
@@ -974,12 +1007,11 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
     def run(self,
             evt: Event,
             det: Optional[DetectorBase] = None,
-            station_ids: Optional[list] = None, signal_kind="power",
+            station_ids: Optional[list] = None,
+            signal_kind="power",
             relative_signal_treshold: float = 0.,
-            depths: np.ndarray = np.arange(
-                400, 900, 100) * units.g / units.cm2,
-            mc_jitter: float = 0 * units.ns,
-            ):
+            depths: np.ndarray = np.arange(400, 900, 100) * units.g / units.cm2,
+            mc_jitter: float = 0 * units.ns):
         """
         Run interferometric reconstruction of depth of coherent signal.
 
@@ -1040,7 +1072,7 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
               shower: BaseShower,
               core: Optional[np.ndarray] = None,
               axis: Optional[np.ndarray] = None,
-              n_sampling: int = 256,
+              window: float = 256 * 0.1 * units.ns,
               use_sim_pulses: bool = False,
               use_channels: bool = False,
               multiprocessing: bool = False,
@@ -1075,7 +1107,7 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
 
         """
         self._debug = debug
-        self._nsampling = n_sampling
+        self._window = window
         self._use_sim_pulses = use_sim_pulses
         self._use_channels = use_channels
         self._multiprocessing = multiprocessing
