@@ -511,6 +511,8 @@ class efieldInterferometricDepthReco:
         debug_traces = []
 
         self._tstep = positions_and_times_and_traces[0][1][1] - positions_and_times_and_traces[0][1][0]
+        warned_early = False
+        warned_late = False
         for position, time, trace, sid, cgid in positions_and_times_and_traces:
             if self._use_sim_pulses and self._mc_jitter > 0:
                 time += np.random.normal(scale=self._mc_jitter)
@@ -521,10 +523,14 @@ class efieldInterferometricDepthReco:
             m = np.argmax(np.abs(trace))
 
             if m < hw:
-                logger.warning("Trace max close to early edge.")
+                if not warned_early:
+                    logger.warning("Trace max close to early edge. This warning is printed only once.")
+                    warned_early = True
                 m = hw
             if m > len(trace) - hw:
-                logger.warning("Trace max close to late edge.")
+                if not warned_late:
+                    logger.warning("Trace max close to late edge. This warning is printed only once.")
+                    warned_late = True
                 m = len(trace) - hw
 
             trace = trace[m - hw:m + hw]
@@ -547,7 +553,7 @@ class efieldInterferometricDepthReco:
         mask = (flu >= self._signal_threshold * np.max(flu))
         logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)}% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
 
-        if self._debug:
+        if False:
             fig = plt.figure()
             gs = gridspec.GridSpec(len(debug_sids), 3, figure=fig, width_ratios=[.05, 1, 0.6], height_ratios=np.ones_like(debug_sids))
             ax_footprint = fig.add_subplot(gs[:, 1])
@@ -573,8 +579,12 @@ class efieldInterferometricDepthReco:
                 time = debug_times[i] / units.ns
                 ax.plot(time, trace, color="navy", lw=.6)
                 ax.tick_params(labelsize="x-small")
-            axes_trace[-1].set_xlabel(r"$t$ [ns]")
-            axes_trace[1].set_ylabel(r"$E_{\mathbf{v}\times\mathbf{B}}$ [eV/m]")
+                # ax.set_title(f"Station {debug_sids[i]}, Channel Group {debug_cgids[i]}", fontsize="xx-small", loc="right")
+
+            axwrap = fig.add_subplot(gs[:, 2], frameon=False)
+            axwrap.tick_params(labelcolor="none", which="both", top=False, bottom=False, left=False, right=False)
+            axwrap.set_xlabel(r"$t$ [ns]")
+            axwrap.set_ylabel(r"$E_{\mathbf{v}\times\mathbf{B}}$ [eV/m]", labelpad=5.0)
 
             plt.show()
 
