@@ -1,0 +1,293 @@
+from NuRadioReco.utilities import units, ice, geometryUtilities
+from NuRadioReco.modules.base.module import register_run
+import NuRadioReco.framework.channel
+import NuRadioReco.framework.sim_station
+import NuRadioReco.detector.antennapattern
+import logging
+import numpy as np
+import scipy.constants
+import scipy.interpolate
+
+logger = logging.getLogger('NuRadioReco.channelGalacticNoiseAdder')
+
+try:
+    from radiocalibrationtoolkit import *  # Documentation: https://github.com/F-Tomas/radiocalibrationtoolkit/tree/main contains SSM, GMOSS, ULSA
+except:
+    logger.warning("radiocalibrationtoolkit import failed. Consider installing it to use more sky models.")
+
+try:
+    from pylfmap import LFmap  # Documentation: https://github.com/F-Tomas/pylfmap needs cfitsio installation
+except:
+    logger.warning("LFmap import failed. Consider installing it to use LFmap as sky model.")
+
+from pygdsm import (
+    GlobalSkyModel16,
+    GlobalSkyModel,
+    LowFrequencySkyModel,
+    HaslamSkyModel,
+)
+
+import healpy
+import astropy.coordinates
+import astropy.units
+
+
+class channelGalacticNoiseAdder:
+    """
+    Class that simulates the noise produced by galactic radio emission
+    Uses the pydgsm package (https://github.com/telegraphic/pygdsm), which provides
+    radio background data based on Oliveira-Costa et al. (2008) (https://arxiv.org/abs/0802.1525)
+    and Zheng et al. (2016) (https://arxiv.org/abs/1605.04920)
+
+    The radio sky model is evaluated on a number of points above the horizon
+    folded with the antenna response. Since evaluating every frequency individually
+    would be too slow, the model is evaluated for a few frequencies and the log10
+    of the brightness temperature is interpolated in between.
+    """
+
+    def __init__(self):
+        self.__debug = None
+        self.__zenith_sample = None
+        self.__azimuth_sample = None
+        self.__n_side = None
+        self.__interpolation_frequencies = None
+        self.__gdsm = None
+        self.__radio_sky = None
+        self.__noise_temperatures = None
+        self.__antenna_pattern_provider = NuRadioReco.detector.antennapattern.AntennaPatternProvider()
+
+    def begin(
+            self,
+            skymodel=None,
+            debug=False,
+            n_side=4,
+            freq_range=None
+    ):
+        """
+        Set up important parameters for the module
+
+        Parameters
+        ----------
+        debug: bool, default: False
+            It True, debug plots will be shown
+        skymodel: {'lfmap', 'lfss', 'gsm2016', 'haslam', 'ssm', 'gmoss', 'ulsa_fdi', 'ulsa_dpi', 'ulsa_ci'}, optional
+            Choose the sky model to use. If none is provided, the Global Sky Model (2008) is used as a default.
+        n_side: int, default: 4
+            The n_side parameter of the healpix map. Has to be power of 2
+            The radio skymap is downsized to the resolution specified by the n_side
+            parameter and for every pixel above the horizon the radio noise coming
+            from that direction is calculated. The number of pixels used is
+            12 * n_side ** 2, so a larger value for n_side will result better accuracy
+            but also greatly increase computing time.
+        freq_range: array of len=2, default: [30, 80] * units.MHZ
+            The sky brightness temperature will be evaluated for the frequencies 
+            within this limit. Brightness temperature for frequencies in between are
+            calculated by interpolation the log10 of the temperature
+            The interpolation_frequencies have to cover the entire passband
+            specified in the run method.
+        """
+        self.__debug = debug
+        self.__n_side = n_side
+
+        if freq_range is None:
+            freq_range = np.array([30, 80]) * units.MHz
+
+        # define interpolation frequencies. Set in logarithmic range from freq_range[0] to freq_range[1],
+        # rounded to 0 decimal places to avoid import errors from LFmap abd tabulated models.
+        self.__interpolation_frequencies = np.around(
+            np.logspace(
+                *np.log10(freq_range / units.MHz), num=30
+            ), 0
+        ) * units.MHz
+
+        # initialise sky model
+        try:
+            if skymodel is None:
+                sky_model = GlobalSkyModel(freq_unit="MHz")
+                logger.warning("No sky model specified. Using standard: Global Sky Model (2008). Available models: "
+                               "lfmap, lfss, gsm2016, haslam, ssm, gmoss, ulsa_fdi, ulsa_dpi, ulsa_ci")
+            elif skymodel == 'lfss':
+                sky_model = LowFrequencySkyModel(freq_unit="MHz")
+                logger.info("Using LFSS as sky model")
+            elif skymodel == 'gsm2008':
+                sky_model = GlobalSkyModel(freq_unit="MHz")
+                logger.info("Using GSM2008 as sky model")
+            elif skymodel == 'gsm2016':
+                sky_model = GlobalSkyModel16(freq_unit="MHz")
+                logger.info("Using GSM2016 as sky model")
+            elif skymodel == 'haslam':
+                sky_model = HaslamSkyModel(freq_unit="MHz", spectral_index=-2.53)
+                logger.info("Using Haslam as sky model")
+            elif skymodel == 'lfmap':
+                sky_model = LFmap()
+                logger.info("Using LFmap as sky model")
+            elif skymodel == 'ssm':
+                sky_model = SSM()
+                logger.info("Using SSM as sky model")
+            elif skymodel == 'gmoss':
+                sky_model = GMOSS()
+                logger.info("Using GMOSS as sky model")
+            elif skymodel == 'ulsa_fdi':
+                sky_model = ULSA(index_type='freq_dependent_index')
+                logger.info("Using ULSA_fdi as sky model")
+            elif skymodel == 'ulsa_ci':
+                sky_model = ULSA(index_type='constant_index')
+                logger.info("Using ULSA_ci as sky model")
+            elif skymodel == 'ulsa_dpi':
+                sky_model = ULSA(index_type='direction_dependent_index')
+                logger.info("Using ULSA_dpi as sky model")
+            else:
+                logger.error(f"Sky model {skymodel} unknown. Defaulting to Global Sky Model (2008).")
+                sky_model = GlobalSkyModel(freq_unit="MHz")
+
+        except NameError:
+            logger.error(f"Could not find {skymodel} skymodel. Do you have the correct package installed? \n"
+                         f"Defaulting to Global Sky Model (2008) as sky model.")
+            sky_model = GlobalSkyModel(freq_unit="MHz")
+
+        self.__noise_temperatures = np.zeros(
+            (len(self.__interpolation_frequencies), healpy.pixelfunc.nside2npix(self.__n_side))
+        )
+        logger.info("generating noise temperatures")
+
+        # generating sky maps and noise temperatures from chosen sky model in given frequency range
+        for i_freq, noise_freq in enumerate(self.__interpolation_frequencies):
+            self.__radio_sky = sky_model.generate(noise_freq / units.MHz)
+            self.__radio_sky = healpy.pixelfunc.ud_grade(self.__radio_sky, self.__n_side)
+            self.__noise_temperatures[i_freq] = self.__radio_sky
+
+    @register_run()
+    def run(
+            self,
+            event,
+            station,
+            detector,
+            passband=None
+    ):
+
+        """
+        Adds noise resulting from galactic radio emission to the field traces
+
+        Parameters
+        ----------
+        event: Event object
+            The event containing the station to whose channels noise shall be added
+        station: Station object
+            The station whose channels noise shall be added to
+        detector: Detector object
+            The detector description
+        passband: list of float
+            Lower and upper bound of the frequency range in which noise shall be
+            added
+        """
+
+        # check that or all channels field.get_frequencies() is identical
+        last_freqs = None
+        for field in station.get_electric_fields():
+            if (not last_freqs is None) and (
+                    not np.allclose(last_freqs, field.get_frequencies(), rtol=0, atol=0.1 * units.MHz)):
+                logger.error("The frequencies of each field must be the same, but they are not!")
+                return
+
+            last_freqs = field.get_frequencies()
+
+        freqs = last_freqs
+        d_f = freqs[2] - freqs[1]
+
+        if passband is None:
+            passband = [30 * units.MHz, 80 * units.MHz]
+        passband_filter = (freqs > passband[0]) & (freqs < passband[1])
+
+        site_latitude, site_longitude = detector.get_site_coordinates(station.get_id())
+        site_location = astropy.coordinates.EarthLocation(lat=site_latitude * astropy.units.deg,
+                                                          lon=site_longitude * astropy.units.deg)
+        station_time = station.get_station_time()
+
+        local_cs = astropy.coordinates.AltAz(location=site_location, obstime=station_time)
+        solid_angle = healpy.pixelfunc.nside2pixarea(self.__n_side, degrees=False)
+
+        pixel_longitudes, pixel_latitudes = healpy.pixelfunc.pix2ang(self.__n_side,
+                                                                     range(healpy.pixelfunc.nside2npix(self.__n_side)),
+                                                                     lonlat=True)
+        pixel_longitudes *= units.deg
+        pixel_latitudes *= units.deg
+
+        galactic_coordinates = astropy.coordinates.Galactic(l=pixel_longitudes * astropy.units.rad,
+                                                            b=pixel_latitudes * astropy.units.rad)
+        local_coordinates = galactic_coordinates.transform_to(local_cs)
+
+        n_ice = ice.get_refractive_index(-0.01, detector.get_site(station.get_id()))
+        n_air = 1.000292  # TODO: This value applies under standard conditions. Does it hold for Greenland?
+
+        for i_pixel in range(healpy.pixelfunc.nside2npix(self.__n_side)):
+            azimuth = local_coordinates[i_pixel].az.rad
+            zenith = np.pi / 2. - local_coordinates[i_pixel].alt.rad
+
+            if zenith > 90. * units.deg:
+                continue
+
+            # consider signal reflection at ice surface
+            fresnel_zenith = geometryUtilities.get_fresnel_angle(zenith, n_ice, 1.)
+
+            if fresnel_zenith is None:
+                continue
+
+            temperature_interpolator = scipy.interpolate.interp1d(self.__interpolation_frequencies,
+                                                                  np.log10(self.__noise_temperatures[:, i_pixel]),
+                                                                  kind='quadratic')
+            noise_temperature = np.power(10, temperature_interpolator(freqs[passband_filter]))
+
+            # calculate spectral radiance of radio signal using rayleigh-jeans law
+            S = 2. * (scipy.constants.Boltzmann * units.joule / units.kelvin) * freqs[passband_filter] ** 2 / (
+                        scipy.constants.c * units.m / units.s) ** 2 * noise_temperature * solid_angle
+            S[np.isnan(S)] = 0
+
+            # calculate radiance per energy bin
+            S_per_bin = S * d_f
+
+            # calculate electric field per energy bin from the radiance per bin
+            E = np.sqrt(S_per_bin / (scipy.constants.c * units.m / units.s * scipy.constants.epsilon_0 * (
+                        units.coulomb / units.V / units.m))) / d_f
+
+            # assign random phases to electric field
+            noise_spectrum = np.zeros((3, freqs.shape[0]), dtype=np.complex128)
+            phases = np.random.uniform(0, 2. * np.pi, len(S))
+
+            noise_spectrum[1][passband_filter] = np.exp(1j * phases) * E
+            noise_spectrum[2][passband_filter] = np.exp(1j * phases) * E
+
+            channel_noise_spec = np.zeros_like(noise_spectrum)
+
+            for field in station.get_electric_fields():
+                # calculate the phase offset in comparison to station center
+                # consider additional distance in air & ice
+                # assume for air & ice constant index of refraction
+                channel_pos_x, channel_pos_y = detector.get_relative_position(station.get_id(), field.get_id())[
+                    [0, 1]]
+                channel_depth = abs(min(detector.get_relative_position(station.get_id(), field.get_id())[2], 0))
+                sin_zenith = np.sin(zenith)
+                delta_phases = (
+                        2 * np.pi * freqs[passband_filter] / (scipy.constants.c * units.m / units.s) * n_air *
+                        (
+                                sin_zenith *
+                                (np.cos(azimuth) * channel_pos_x + channel_pos_y * np.sin(azimuth)) +
+                                channel_depth *
+                                ((n_ice / n_air) ** 2 + sin_zenith ** 2) /
+                                np.sqrt((n_ice / n_air) ** 2 - sin_zenith ** 2)
+                        )
+                )
+
+                # add random polarizations and phase to electric field
+                polarizations = np.random.uniform(0, 2. * np.pi, len(S))
+
+                channel_noise_spec[1][passband_filter] = noise_spectrum[1][passband_filter] * np.exp(
+                    1j * delta_phases) * np.cos(polarizations)
+                channel_noise_spec[2][passband_filter] = noise_spectrum[2][passband_filter] * np.exp(
+                    1j * delta_phases) * np.sin(polarizations)
+
+                # add noise spectrum to field freq spectrum
+                channel_spectrum = field.get_frequency_spectrum()
+                channel_spectrum += np.sum(channel_noise_spec, axis=0)
+                field.set_frequency_spectrum(channel_spectrum, field.get_sampling_rate())
+
+        return
