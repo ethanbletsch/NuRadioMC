@@ -12,6 +12,8 @@ import NuRadioReco.framework.sim_station
 import NuRadioReco.framework.channel
 import NuRadioReco.framework.electric_field
 
+from NuRadioReco.framework.parameters import stationParameters as stnp
+from NuRadioReco.framework.parameters import electricFieldParameters as efp
 from NuRadioReco.modules.template_synthesis.slicedShower import slicedShower
 from NuRadioReco.modules.base.module import register_run
 from NuRadioReco.utilities import units
@@ -62,7 +64,7 @@ class groundElementSynthesis:
     n_slices : int
         The number of slices the antenna observes
     pos : array_like
-        The position of the antenna, in the CORSIKA coordinate system
+        The x,y,z position of the antenna, in the CORSIKA coordinate system
 
     Attributes
     ----------
@@ -96,10 +98,14 @@ class groundElementSynthesis:
         self.__template_spectrum_ce_lin = None
         self.__template_frequencies = None
 
+        self.__template_sampling_rate = None
+        self.__template_start_time = None
+
         # Fill in required variables
-        logger.warning("Provided position is assumed to be in CORSIKA coordinate system \n"
-                       "To use the NRR coordinate system use the position attribute")
-        self.position = pos
+        if pos is not None:
+            logger.status("Provided position is assumed to be in CORSIKA coordinate system \n"
+                          "To use the NRR coordinate system use the position attribute")
+            self.position = [-pos[1], pos[0], pos[2]]
 
     @property
     def n_slices(self):
@@ -136,6 +142,22 @@ class groundElementSynthesis:
     @property
     def name(self):
         return self.__name
+
+    @property
+    def sampling_rate(self):
+        return self.__template_sampling_rate
+
+    @sampling_rate.setter
+    def sampling_rate(self, value):
+        self.__template_sampling_rate = value
+
+    @property
+    def start_time(self):
+        return self.__template_start_time
+
+    @start_time.setter
+    def start_time(self, value):
+        self.__template_start_time = value
 
     @property
     def spectral_coefficients(self):
@@ -351,7 +373,7 @@ class templateSynthesis:
 
         length_saved = False
         for antenna in self.__antennas:
-            geo, ce = origin_shower.get_trace(antenna.name)  # SLICES x SAMPLES
+            geo, ce, times = origin_shower.get_trace(antenna.name, return_start_time=True)  # geo, ce : SLICES x SAMPLES
 
             # Filter traces
             geo_filtered = origin_shower.filter_trace(geo, *self.__freq_interval)
@@ -370,10 +392,12 @@ class templateSynthesis:
             frequencies = np.fft.rfftfreq(geo_filtered.shape[-1], d=shower_sampling_res / units.s) * units.Hz
 
             antenna.set_template(origin_shower.xmax, geo_filtered, ce_filtered, frequencies - self.__freq_center)
+            antenna.start_time = times[0]  # by CoREAS definition, all slices have the same start time
+            antenna.sampling_rate = 1. / shower_sampling_res
 
-    @register_run()
-    def run(self, target_xmax, long_profile):
-        assert len(long_profile) == self.__n_slices, "Long profile does not have correct number of slices"
+    def synthesise(self, target_xmax, long_profile):
+        assert len(long_profile) == self.__n_slices, ("Long profile does not have correct number of slices \n"
+                                                      f"The bins should be {self.__g_slices} g/cm2")
 
         traces_synth = np.zeros((len(self.__antennas), 3, self.__n_slices, self.__trace_length))
         for ind, antenna in enumerate(self.__antennas):
@@ -384,6 +408,68 @@ class templateSynthesis:
             traces_synth[ind, 2] = synth[2] * long_profile[:, np.newaxis]
 
         return traces_synth  # ANT x {GEO, CE, CE_LIN} x SLICES x SAMPLES
+
+    @register_run()
+    def run(self, target_xmax, long_profile, use_ce_lin=False):
+        """
+        Run the template synthesis module and put the resulting traces in an Event object.
+        The Event object has one Station with ID=1, which contains one SimStation with the
+        same ID. The SimStation then holds the synthesised electric fields, which are
+        equipped with the position of the channel (in the NRR CS) they were synthesised for.
+
+        Parameters
+        ----------
+        target_xmax : float
+            The Xmax of the target shower
+        long_profile : array of floats
+            The longitudinal profile of the target shower, sliced using the same grammage as the template shower
+        use_ce_lin : bool, default=False
+            If True, use the linear charge-excess parameters to synthesise (i.e. CE_LIN)
+
+        Returns
+        -------
+        event : Event
+            The Event object with the synthesised electric fields
+        """
+        traces = self.synthesise(target_xmax, long_profile)
+        traces_ground, traces_ground_ce_lin = self.transform_to_ground(traces)
+
+        # Sum over all slices -> ANT x COREAS_POL X SAMPLES
+        if use_ce_lin:
+            traces_ground = np.sum(traces_ground_ce_lin, axis=2)
+        else:
+            traces_ground = np.sum(traces_ground, axis=2)
+
+        event = NuRadioReco.framework.event.Event(1, 1)
+
+        # TODO: Add SimShower ?
+
+        # Add electric fields in single SimStation
+        station = NuRadioReco.framework.station.Station(1)
+        sim_station = NuRadioReco.framework.sim_station.SimStation(1)
+
+        for ind, antenna in enumerate(self.__antennas):
+            e_field = NuRadioReco.framework.electric_field.ElectricField(np.array([ind]), position=antenna.position)
+
+            e_field.set_trace(traces_ground[ind], antenna.sampling_rate)
+            e_field.set_trace_start_time(antenna.start_time)
+
+            e_field.set_parameter(efp.zenith, self.__zenith)
+            e_field.set_parameter(efp.azimuth, self.__azimuth)
+
+            sim_station.add_electric_field(e_field)
+
+        sim_station.set_parameter(stnp.zenith, self.__zenith)
+        sim_station.set_parameter(stnp.azimuth, self.__azimuth)
+        sim_station.set_parameter(stnp.cr_xmax, target_xmax)
+
+        sim_station.set_magnetic_field_vector(self.__magnet)
+        sim_station.set_is_cosmic_ray()
+
+        station.set_sim_station(sim_station)
+        event.set_station(station)
+
+        yield event
 
     def get_transformer(self):
         transformer = radiotools.coordinatesystems.cstrafo(

@@ -46,7 +46,7 @@ class MyTestCase(unittest.TestCase):
 
         synthesis.make_template(origin)
 
-        traces_synth = synthesis.run(
+        traces_synth = synthesis.synthesise(
             origin.xmax,
             origin.get_long_profile()[:-1]
         )
@@ -84,7 +84,7 @@ class MyTestCase(unittest.TestCase):
 
         synthesis.make_template(origin)
 
-        traces_synth = synthesis.run(
+        traces_synth = synthesis.synthesise(
             target.xmax,
             target.get_long_profile()[:-1]
         )
@@ -162,7 +162,7 @@ class MyTestCase(unittest.TestCase):
 
         synthesis.make_template(origin)
 
-        traces_synth = synthesis.run(
+        traces_synth = synthesis.synthesise(
             origin.xmax,
             origin.get_long_profile()[:-1]
         )
