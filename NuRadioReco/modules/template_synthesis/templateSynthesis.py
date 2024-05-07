@@ -103,8 +103,8 @@ class groundElementSynthesis:
 
         # Fill in required variables
         if pos is not None:
-            logger.status("Provided position is assumed to be in CORSIKA coordinate system \n"
-                          "To use the NRR coordinate system use the position attribute")
+            logger.warning("Provided position is assumed to be in CORSIKA coordinate system \n"
+                           "To use the NRR coordinate system use the position attribute")
             self.position = [-pos[1], pos[0], pos[2]]
 
     @property

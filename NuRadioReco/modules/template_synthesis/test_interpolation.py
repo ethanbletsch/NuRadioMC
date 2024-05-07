@@ -33,7 +33,7 @@ def compare_trace(trace1, trace2, plot=False):
 
 
 class MyTestCase(unittest.TestCase):
-    def self_synthesis(self):
+    def test_self_synthesis(self):
         origin = slicedShower(
             '/home/mitjadesmet/Data/ShowersSKA/OriginShowers/SIM130165.hdf5'
         )
@@ -67,7 +67,7 @@ class MyTestCase(unittest.TestCase):
             assert np.sum(np.abs(target_ce_filtered - traces_ce)) < 1e-14
             assert np.sum(np.abs(target_ce_filtered - traces_ce_lin)) < 1e-14
 
-    def test_synthesis(self):
+    def synthesis(self):
         origin = slicedShower(
             '/home/mitjadesmet/Data/ShowersSKA/OriginShowers/SIM130165.hdf5'
         )
@@ -179,7 +179,7 @@ class MyTestCase(unittest.TestCase):
         origin_fluences = []
         for ind, ant in enumerate(synthesis.antennas):
             ant_pos = transformer.transform_to_vxB_vxvxB(
-                np.array([-ant.position[1], ant.position[0], ant.position[2]]), core=[0, 0, 460]
+                ant.position, core=[0, 0, 460]
             )
             x_vB.append(ant_pos[0])
             y_vvB.append(ant_pos[1])
@@ -194,7 +194,7 @@ class MyTestCase(unittest.TestCase):
             trace_ground = geo_ce_to_e(trace_geo_filtered, trace_ce_filtered, *ant_pos[:2])
 
             origin_fluences.append(np.sum(trace_ground ** 2))
-
+    
         # Make interpolator object
         interpolator = interpF(np.array(x_vB), np.array(y_vvB), traces_fluences)
         interpolator_origin = interpF(np.array(x_vB), np.array(y_vvB), origin_fluences)
