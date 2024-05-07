@@ -6,6 +6,12 @@ import h5py
 import numpy as np
 import radiotools.coordinatesystems
 
+import NuRadioReco.framework.event
+import NuRadioReco.framework.station
+import NuRadioReco.framework.sim_station
+import NuRadioReco.framework.channel
+import NuRadioReco.framework.electric_field
+
 from NuRadioReco.modules.template_synthesis.slicedShower import slicedShower
 from NuRadioReco.modules.base.module import register_run
 from NuRadioReco.utilities import units
@@ -45,6 +51,39 @@ def amplitude_function(params, frequencies, d_noise=0.):
 
 
 class groundElementSynthesis:
+    """
+    This class is supposed to represent an antenna in the template synthesis framework.
+    It holds the position of the antenna and the spectral coefficients for all the slices
+    the antenna observes. After it has been equipped with a template shower, it can be
+    used to synthesise the electric fields for any Xmax.
+
+    Parameters
+    ----------
+    n_slices : int
+        The number of slices the antenna observes
+    pos : array_like
+        The position of the antenna, in the CORSIKA coordinate system
+
+    Attributes
+    ----------
+    n_slices
+    position
+    name
+    spectral_coefficients
+    has_template : float
+        Whether or not a template shower has been set
+
+    Notes
+    -----
+    The naming scheme is inspired by CoREAS. For this reason, the position is internally
+    stored in the CORSIKA coordinate system. When supplying a position to the class
+    constructor, it should be in the CORSIKA coordinate system. This setup is chosen
+    to more easily interface with the spectral coefficient files. However, the position
+    attribute interface assumes the NRR coordinate system to be consistent with the NRR
+    framework. So if you wish to set the position using the NRR coordinate system,
+    simply leave the position in the constructor to its default value of `None` and
+    set the position using the attribute.
+    """
     def __init__(self, n_slices, pos=None):
         # Set default values
         self.__x, self.__y, self.__z = 0, 0, 0
@@ -58,6 +97,8 @@ class groundElementSynthesis:
         self.__template_frequencies = None
 
         # Fill in required variables
+        logger.warning("Provided position is assumed to be in CORSIKA coordinate system \n"
+                       "To use the NRR coordinate system use the position attribute")
         self.position = pos
 
     @property
@@ -70,19 +111,23 @@ class groundElementSynthesis:
     @property
     def position(self):
         """
-        Position of the antenna in the ground plane, in meters, in the **CORSIKA** coordinate system
+        Position of the antenna in the ground plane, in meters, in the **NRR** coordinate system
         """
-        return np.array([self.__x, self.__y, self.__z]) / units.m
+        return np.array([-1 * self.__y, self.__x, self.__z]) / units.m
 
     @position.setter
     def position(self, pos):
+        """
+        Set the position of the antenna using the **NRR** coordinate system
+        """
         if pos is None:
             logger.warning("No new position provided!")
             return
         if len(pos) != 3:
             raise ValueError("New position array needs to contain exactly 3 elements")
 
-        self.__x, self.__y, self.__z = pos
+        self.__y, self.__x, self.__z = pos
+        self.__y *= -1
 
         positive_x = 1 if self.__x > 0 else 0
         positive_y = 1 if self.__y > 0 else 0
