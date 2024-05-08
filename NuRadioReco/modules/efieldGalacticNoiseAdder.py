@@ -32,7 +32,7 @@ import astropy.coordinates
 import astropy.units
 
 
-class channelGalacticNoiseAdder:
+class efieldGalacticNoiseAdder:
     """
     Class that simulates the noise produced by galactic radio emission
     Uses the pydgsm package (https://github.com/telegraphic/pygdsm), which provides
@@ -80,7 +80,7 @@ class channelGalacticNoiseAdder:
             12 * n_side ** 2, so a larger value for n_side will result better accuracy
             but also greatly increase computing time.
         freq_range: array of len=2, default: [30, 80] * units.MHZ
-            The sky brightness temperature will be evaluated for the frequencies 
+            The sky brightness temperature will be evaluated for the frequencies
             within this limit. Brightness temperature for frequencies in between are
             calculated by interpolation the log10 of the temperature
             The interpolation_frequencies have to cover the entire passband
@@ -188,7 +188,6 @@ class channelGalacticNoiseAdder:
                     not np.allclose(last_freqs, field.get_frequencies(), rtol=0, atol=0.1 * units.MHz)):
                 logger.error("The frequencies of each field must be the same, but they are not!")
                 return
-
             last_freqs = field.get_frequencies()
 
         freqs = last_freqs
@@ -262,9 +261,9 @@ class channelGalacticNoiseAdder:
                 # calculate the phase offset in comparison to station center
                 # consider additional distance in air & ice
                 # assume for air & ice constant index of refraction
-                channel_pos_x, channel_pos_y = detector.get_relative_position(station.get_id(), field.get_id())[
+                channel_pos_x, channel_pos_y = detector.get_relative_position(station.get_id(), field.get_channel_ids()[0])[
                     [0, 1]]
-                channel_depth = abs(min(detector.get_relative_position(station.get_id(), field.get_id())[2], 0))
+                channel_depth = abs(min(detector.get_relative_position(station.get_id(), field.get_channel_ids()[0])[2], 0))
                 sin_zenith = np.sin(zenith)
                 delta_phases = (
                         2 * np.pi * freqs[passband_filter] / (scipy.constants.c * units.m / units.s) * n_air *
@@ -291,3 +290,6 @@ class channelGalacticNoiseAdder:
                 field.set_frequency_spectrum(channel_spectrum, field.get_sampling_rate())
 
         return
+
+    def end(self):
+        pass

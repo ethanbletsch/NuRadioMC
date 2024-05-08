@@ -553,7 +553,10 @@ class efieldInterferometricDepthReco:
         mask = (flu >= self._signal_threshold * np.max(flu))
         logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)}% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
 
-        if False:
+        spheric = hp.cartesian_to_spherical(*self._axis)
+        logger.info(f"Zenith {spheric[0] / units.deg: .2f}, azimuth {spheric[1] / units.deg: .2f}")
+
+        if self._debug:
             fig = plt.figure()
             gs = gridspec.GridSpec(len(debug_sids), 3, figure=fig, width_ratios=[.05, 1, 0.6], height_ratios=np.ones_like(debug_sids))
             ax_footprint = fig.add_subplot(gs[:, 1])
@@ -966,6 +969,8 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
         # add smaller planes sampled along inital rit axis to increase amount of points to fit final rit axis
         if self._refine_axis:
+            old_debug = self._debug
+            self._debug = False
             refinement = 4
             depths2 = np.linspace(
                 self._depths[0], self._depths[-1], refinement*len(self._depths))
@@ -976,13 +981,15 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                 weights.append(weight)
                 sigma_points.append(ground_grid_uncertainty)
 
+            self._debug = old_debug
+
             direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(
                 found_points, weights, direction_rec, core_rec, full_output=True)
             logger.info(f"core (refined): {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
 
         if self._use_sim_pulses and self._refine_axis:
             logger.info(f"Opening angle with MC (refined): {np.round(opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
-        if self._use_sim_pulses and self._refine_axis and self._debug:
+        if self._refine_axis and self._debug:
             plot_shower_axis_points(
                 np.array(found_points), np.array(weights), self._shower)
 
