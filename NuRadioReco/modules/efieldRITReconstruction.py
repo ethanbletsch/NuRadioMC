@@ -21,7 +21,7 @@ from scipy.optimize import curve_fit
 from typing import Optional
 from collections import defaultdict
 
-from tqdm import tqdm
+from tqdm import tqdm, trange
 from os import cpu_count
 
 import logging
@@ -81,9 +81,9 @@ class efieldInterferometricDepthReco:
     def set_geometry(self, shower: BaseShower, core: Optional[np.ndarray] = None,
                      axis: Optional[np.ndarray] = None, smear_angle_radians: float = 0, smear_core_meter: float = 0):
 
-        # protect against smearing of passed geometry
-        assert not (core is not None and smear_core_meter != 0)
-        assert not (axis is not None and smear_angle_radians != 0)
+        # protect against smearing of passed geometry. // Turned off as taking median of 10 smears was found to be beneficial.
+        # assert not (core is not None and smear_core_meter != 0)
+        # assert not (axis is not None and smear_angle_radians != 0)
 
         # set mc core if no core is given
         if core is None:
@@ -123,7 +123,7 @@ class efieldInterferometricDepthReco:
               shower: BaseShower,
               core: Optional[np.ndarray] = None,
               axis: Optional[np.ndarray] = None,
-              window: float = 256 * 0.1 * units.ns,
+              window: float = 150*units.ns,
               use_sim_pulses: bool = False,
               use_channels: bool = False,
               debug: bool = False):
@@ -199,8 +199,7 @@ class efieldInterferometricDepthReco:
         signals = np.zeros(len(depths))
         for idx, depth in enumerate(depths):
             try:
-                dist = self._at.get_distance_xmax_geometric(
-                    self._zenith, depth, observation_level=self._shower[shp.observation_level])
+                dist = self._at.get_distance_xmax_geometric(self._zenith, depth, observation_level=self._shower[shp.observation_level])
             except ValueError:
                 logger.info(
                     "ValueError in get_distance_xmax_geometric, setting signal to 0")
@@ -623,21 +622,27 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
     def __init__(self):
         super().__init__()
         self._multiprocessing = None
+        self._core0 = None
+        self._axis0 = None
+        self._core_spread = None
+        self._axis_spread = None
+        self._intermediate_field_distance = None
 
     def begin(self,
               shower: BaseShower,
               core: Optional[np.ndarray] = None,
               axis: Optional[np.ndarray] = None,
-              window: float = 256 * 0.1 * units.ns,
+              window: float = 150*units.ns,
               use_sim_pulses: bool = False,
               use_channels: bool = False,
-              core_spread: float = 10 * units.m,
+              core_spread: float = 10*units.m,
               axis_spread: float = 1*units.deg,
               multiprocessing: bool = False,
               sample_angular_resolution: float = 0.005*units.deg,
               initial_grid_spacing: float = 60*units.m,
               cross_section_width: float = 1000*units.m,
               refine_axis: bool = False,
+              intermediate_field_distance: float = 2500*units.m,
               debug: bool = False
               ):
         """
@@ -672,16 +677,22 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         self._angres = sample_angular_resolution / units.radian
         self._initial_grid_spacing = initial_grid_spacing / units.m
         self._cross_section_width = cross_section_width / units.m
+        self._intermediate_field_distance = intermediate_field_distance / units.m
 
-        if core is not None:
-            logger.warning("Passed core, setting core spread to 0.")
-            core_spread = 0
-        if axis is not None:
-            logger.warning("Passed axis, setting axis spread to 0.")
-            axis_spread = 0
+        # if core is not None:
+        #     logger.warning("Passed core, setting core spread to 0.")
+        #     core_spread = 0
+        # if axis is not None:
+        #     logger.warning("Passed axis, setting axis spread to 0.")
+        #     axis_spread = 0
 
-        self.set_geometry(shower, core=core, axis=axis, smear_angle_radians=axis_spread *
-                          units.radian, smear_core_meter=core_spread / units.m)
+        self._axis_spread = axis_spread / units.radian
+        self.set_geometry(shower, core=core, axis=axis, smear_angle_radians=0, smear_core_meter=0)
+        self._core0 = np.copy(self._core)
+        self._axis0 = np.copy(self._axis)
+        self._axis_spread = axis_spread / units.radian
+        self._core_spread = core_spread / units.m
+
         self.update_atmospheric_model_and_refractivity_table()
 
     def find_maximum_in_plane(self, xs_showerplane, ys_showerplane, p_axis, cs):
@@ -914,91 +925,110 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             (Default: 1000m).
 
         """
+        iterations = 10
 
-        found_points = []
-        sigma_points = []
-        weights = []
-
-        for depth in tqdm(self._depths):
-            found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
-                depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
-
-            found_points.append(found_point)
-            sigma_points.append(ground_grid_uncertainty)
-            weights.append(weight)
-
-        # extend to new depths if max is found at edges of self._depths
-        counter = 0
-        while True:
-            if np.argmax(weights) != 0 or counter >= 10:
-                break
-
-            new_depth = self._depths[0] - self._binsize
-            logger.info("extend to", new_depth)
-            found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
-                new_depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
-
-            self._depths = np.hstack(([new_depth], self._depths))
-            found_points = [found_point] + found_points
-            weights = [weight] + weights
-            sigma_points = [np.array(ground_grid_uncertainty)] + sigma_points
-            counter += 1
-
-        counter = 0
-        while True:
-            if np.argmax(weights) != len(weights) or counter >= 10:
-                break
-
-            new_depth = self._depths[-1] + self._binsize
-            logger.info("extend to", new_depth)
-            found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
-                new_depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
-
-            self._depths = np.hstack((self._depths, [new_depth]))
-            found_points.append(found_point)
-            weights.append(weight)
-            sigma_points.append(ground_grid_uncertainty)
-            counter += 1
-
-        direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(
-            found_points, weights, self._axis, self._core, full_output=True)
-        logger.info(f"core: {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
-
-        if self._use_sim_pulses:
-            logger.info(f"Opening angle with MC: {np.round(opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
-
-        # add smaller planes sampled along inital rit axis to increase amount of points to fit final rit axis
-        if self._refine_axis:
-            old_debug = self._debug
-            self._debug = False
-            refinement = 4
-            depths2 = np.linspace(
-                self._depths[0], self._depths[-1], refinement*len(self._depths))
-            for depth in tqdm([d for d in depths2 if d not in self._depths]):
+        maxima = []
+        w_maxima = []
+        for i in trange(iterations):
+            p = []
+            w = []
+            if i >= 1:
+                self.set_geometry(self._shower, self._core0, self._axis0, self._axis_spread, self._core_spread)
+            for depth in tqdm(self._depths):
                 found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
-                    depth, core_rec, direction_rec, self._cross_section_width / 4, self._cross_section_width / 20)
-                found_points.append(found_point)
-                weights.append(weight)
-                sigma_points.append(ground_grid_uncertainty)
+                    depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
 
-            self._debug = old_debug
+                p.append(found_point)
+                # sigma_points.append(ground_grid_uncertainty)
+                w.append(weight)
+
+            # extend to new depths if max is found at edges of self._depths
+            counter = 0
+            while True:
+                if np.argmax(w) != 0 or counter >= 10:
+                    break
+
+                new_depth = self._depths[0] - self._binsize
+                logger.info("extend to", new_depth)
+                found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
+                    new_depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
+
+                self._depths = np.hstack(([new_depth], self._depths))
+                found_points = [found_point] + p
+                w = [weight] + w
+                # sigma_points = [np.array(ground_grid_uncertainty)] + sigma_points
+                counter += 1
+
+            counter = 0
+            while True:
+                if np.argmax(w) != len(w) or counter >= 10:
+                    break
+
+                new_depth = self._depths[-1] + self._binsize
+                logger.info("extend to", new_depth)
+                found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
+                    new_depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
+
+                self._depths = np.hstack((self._depths, [new_depth]))
+                p.append(found_point)
+                w.append(weight)
+                # sigma_points.append(ground_grid_uncertainty)
+                counter += 1
 
             direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(
-                found_points, weights, direction_rec, core_rec, full_output=True)
-            logger.info(f"core (refined): {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
+                p, w, self._axis, self._core, full_output=True)
+            logger.info(f"core: {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
 
-        if self._use_sim_pulses and self._refine_axis:
-            logger.info(f"Opening angle with MC (refined): {np.round(opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
-        if self._refine_axis and self._debug:
-            plot_shower_axis_points(
-                np.array(found_points), np.array(weights), self._shower)
+            if self._use_sim_pulses:
+                logger.info(f"Opening angle with MC: {np.round(opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
 
-        self._data["core"] = {"opt": core_rec *
-                              units.m, "std": core_std * units.m}
-        self._data["opening_angle_mc"] = {
-            "opt": opening_angle_sph * units.rad, "std": opening_angle_sph_std * units.rad}
-        self._data["found_points"] = np.array(found_points)
-        self._data["weights"] = np.array(weights)
+            # add smaller planes sampled along inital rit axis to increase amount of points to fit final rit axis
+            if self._refine_axis:
+                old_debug = self._debug
+                self._debug = False
+                refinement = 2
+                depths2 = np.linspace(
+                    self._depths[0], self._depths[-1], refinement*len(self._depths))
+                for depth in tqdm([d for d in depths2 if d not in self._depths]):
+                    found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
+                        depth, core_rec, direction_rec, self._cross_section_width / 4, self._cross_section_width / 20)
+                    p.append(found_point)
+                    w.append(weight)
+                    # sigma_points.append(ground_grid_uncertainty)
+
+                self._debug = old_debug
+
+            maxima.append(np.array(p))
+            w_maxima.append(np.array(w))
+
+        found_points = np.median(np.array(maxima), axis=0)
+        weights = np.median(np.array(w_maxima), axis=0)
+        zenith0 = hp.get_angle(np.array([0, 0, 1]), self._axis0)
+
+        distances = []
+        for i, depth in enumerate(np.hstack((self._depths, [d for d in depths2 if d not in self._depths]))):
+            distances.append(self._at.get_distance_xmax_geometric(zenith0, depth, observation_level=self._shower[shp.observation_level]))
+        distances = np.asarray(distances)
+        regimes = {"near_and_intermediate": distances >= 0,
+                   "intermediate": distances >= self._intermediate_field_distance}
+
+        for regime_key, regime in regimes.items():
+            direction_rec, core_rec, opening_angle_sph, opening_angle_sph_std, core_std = self.fit_axis(found_points[regime, :], weights[regime], self._axis0, self._core0, full_output=True)
+            logger.info(f"core {regime_key} (refined): {list(np.round(core_rec, 3))} +- {list(np.round(core_std, 3))} m")
+
+            if self._refine_axis:
+                logger.info(f"Opening angle {regime_key} with axis0 (refined): {opening_angle_sph / units.deg: .3f} +- {opening_angle_sph_std / units.deg: .3f} deg")
+
+            if self._refine_axis and self._debug:
+                plot_shower_axis_points(np.array(found_points[regime]), np.array(weights[regime]), self._shower)
+
+            self._data[f"core_{regime_key}"] = {"opt": core_rec * units.m,
+                                                "std": core_std * units.m}
+            self._data[f"opening_angle_v0_{regime_key}"] = {"opt": opening_angle_sph * units.rad,
+                                                            "std": opening_angle_sph_std * units.rad}
+            self._data[f"found_points_{regime_key}"] = np.array(found_points)
+            self._data[f"weights_{regime_key}"] = np.array(weights)
+
         return direction_rec, core_rec
 
     def fit_axis(self, points, weights, axis0, core0, full_output: bool = False):
@@ -1010,13 +1040,14 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         popt, pcov = curve_fit(interferometry.fit_axis, points[:, -1], points.flatten(),
                                sigma=np.amax(weights) / np.repeat(weights, 3), p0=[*hp.cartesian_to_spherical(*axis0), core0[0], core0[1]])
         direction_rec = hp.spherical_to_cartesian(*popt[:2])
-        core_rec = interferometry.fit_axis(np.array([self._core[-1]]), *popt)
+        core_rec = interferometry.fit_axis(np.zeros(1), *popt) # 0 == GROUND
+
         if not full_output:
             return direction_rec, core_rec
 
         thetavar, phivar, corex_var, corey_var = np.diag(pcov)
         opening_angle, opening_angle_var = opening_angle_spherical(*hp.cartesian_to_spherical(
-            *direction_rec), self._shower[shp.zenith], self._shower[shp.azimuth], thetavar, phivar)
+            *direction_rec), *hp.cartesian_to_spherical(*axis0), thetavar, phivar)
 
         return direction_rec, core_rec, opening_angle, np.sqrt(opening_angle_var), np.sqrt([corex_var, corey_var])
 
@@ -1089,7 +1120,7 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
               shower: BaseShower,
               core: Optional[np.ndarray] = None,
               axis: Optional[np.ndarray] = None,
-              window: float = 256 * 0.1 * units.ns,
+              window: float = 150*units.ns,
               use_sim_pulses: bool = False,
               use_channels: bool = False,
               multiprocessing: bool = False,
