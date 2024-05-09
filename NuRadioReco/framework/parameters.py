@@ -125,10 +125,7 @@ class showerParameters(Enum):
     interferometric_shower_maximum = 120  #: depth of the maximum of the longitudinal profile of the beam-formed signal
     interferometric_shower_axis = 121  #: shower axis (direction) derived from beam-formed signal
     interferometric_core = 122  #: core (intersection of shower axis with obs plane) derived from beam-formed signal
-    interferometric_width_vxB = 123 # standard deviation in the vxB direction of the lateral RIT profile at interferometric_shower_maximum
-    interferometric_width_vxvxB = 124 # standard deviation in the vxvxB direction of the lateral RIT profile at interferometric_shower_maximum
-    interferometric_width_index = 125 # lorentzian index of lateral RIT profile at interferometric_shower_maximum
-    interferometric_fwhm = 126
+    interferometric_fwhm = 123  #: vxB FWHM of lateral RIT profile at interferometric_shower_maximum
 
 
 class emitterParameters(Enum):
