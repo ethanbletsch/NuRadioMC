@@ -627,6 +627,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         self._core_spread = None
         self._axis_spread = None
         self._intermediate_field_distance = None
+        self._iterations = None
 
     def begin(self,
               shower: BaseShower,
@@ -643,6 +644,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
               cross_section_width: float = 1000*units.m,
               refine_axis: bool = False,
               intermediate_field_distance: float = 2500*units.m,
+              iterations: int = 10,
               debug: bool = False
               ):
         """
@@ -692,6 +694,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         self._axis0 = np.copy(self._axis)
         self._axis_spread = axis_spread / units.radian
         self._core_spread = core_spread / units.m
+        self._iterations = iterations
 
         self.update_atmospheric_model_and_refractivity_table()
 
@@ -925,11 +928,9 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
             (Default: 1000m).
 
         """
-        iterations = 10
-
         maxima = []
         w_maxima = []
-        for i in trange(iterations):
+        for i in trange(self._iterations):
             p = []
             w = []
             if i >= 1:
@@ -1208,7 +1209,7 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         rips = pk_half[3][0]
         fwhm = xs[round(rips)] - xs[round(lips)]
 
-        if True:
+        if self._debug:
             pk_full = scipy.signal.peak_widths(lateral_vxB_profile,
                                                [np.argmax(lateral_vxB_profile)],
                                                rel_height=1)
@@ -1223,7 +1224,6 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
             # ax.plot(xs_linspace, lorentzian(xs_linspace, fwhm_fit), color="m", ls="--", lw=.8, label=f"Fit: FWHM = {fwhm_fit: .2f} m")
             ax.legend()
             plt.show()
-            sys.exit()
 
         return fwhm
 
