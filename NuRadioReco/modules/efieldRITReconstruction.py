@@ -13,7 +13,6 @@ from NuRadioReco.detector.detector_base import DetectorBase
 
 import numpy as np
 import scipy
-import sys
 import matplotlib.pyplot as plt
 from matplotlib import gridspec, colorbar
 from scipy.optimize import curve_fit
@@ -398,7 +397,7 @@ class efieldInterferometricDepthReco:
             ax.plot(depths_final, normal(depths_final, *rit_parameters),
                     label="Gaussian fit", color="black", ls="--")
             ax.axvline(rit_parameters[1])
-            ax.set_xlabel(r"$X [\mathrm{g}/\mathrm{cm}^2]")
+            ax.set_xlabel(r"$X [\mathrm{g}/\mathrm{cm}^2]$")
             ax.set_ylabel(self._signal_kind)
             ax.legend()
             plt.show()
@@ -408,7 +407,7 @@ class efieldInterferometricDepthReco:
             xrit * units.g / units.cm2)
 
     def end(self):
-        pass
+        return self._data
 
     def update_atmospheric_model_and_refractivity_table(self):
         """
@@ -500,18 +499,18 @@ class efieldInterferometricDepthReco:
                 positions_and_times_and_traces += [(electric_field.get_position(),
                                                     electric_field.get_times(),
                                                     self._cs.transform_to_vxB_vxvxB(electric_field.get_trace())[0],
-                                                    sid,
-                                                    det.get_channel_group_id(sid, electric_field.get_channel_ids()[0]))
+                                                    sid, det.get_channel_group_id(sid, electric_field.get_channel_ids()[0]))
                                                    for electric_field in station.get_electric_fields()]
 
-        debug_sids = [2, 3, 6, 7]
-        debug_cgids = [det.get_channel_group_id(sid, det.get_channel_ids(sid)[0]) for sid in debug_sids]
-        debug_times = []
-        debug_traces = []
+        # debug_sids = [2, 3, 6, 7]
+        # debug_cgids = [det.get_channel_group_id(sid, det.get_channel_ids(sid)[0]) for sid in debug_sids]
+        # debug_times = []
+        # debug_traces = []
 
         self._tstep = positions_and_times_and_traces[0][1][1] - positions_and_times_and_traces[0][1][0]
         warned_early = False
         warned_late = False
+        sids_for_rit = []
         for position, time, trace, sid, cgid in positions_and_times_and_traces:
             if self._use_sim_pulses and self._mc_jitter > 0:
                 time += np.random.normal(scale=self._mc_jitter)
@@ -538,14 +537,16 @@ class efieldInterferometricDepthReco:
             traces.append(trace)
             times.append(time)
             pos.append(position)
+            sids_for_rit.append(sid)
 
-            if sid in debug_sids and cgid in debug_cgids:
-                debug_times.append(time)
-                debug_traces.append(trace)
+            # if sid in debug_sids and cgid in debug_cgids:
+            #     debug_times.append(time)
+            #     debug_traces.append(trace)
 
         traces = np.array(traces)
         times = np.array(times)
         pos = np.array(pos)
+        sids_for_rit = np.array(sids_for_rit)
         assert not np.all(pos[:, :2] == 0)  # efield positions are set to [0, 0, 0] in voltageToEfieldConverter. This should protect against such behaviour.
 
         flu = np.sum(traces ** 2, axis=-1)
@@ -555,9 +556,10 @@ class efieldInterferometricDepthReco:
         spheric = hp.cartesian_to_spherical(*self._axis)
         logger.info(f"Zenith {spheric[0] / units.deg: .2f}, azimuth {spheric[1] / units.deg: .2f}")
 
+        debug_sids = [None]
         if self._debug:
             fig = plt.figure()
-            gs = gridspec.GridSpec(len(debug_sids), 3, figure=fig, width_ratios=[.05, 1, 0.6], height_ratios=np.ones_like(debug_sids))
+            gs = gridspec.GridSpec(len(debug_sids), 2, figure=fig, width_ratios=[.05, 1], height_ratios=np.ones_like(debug_sids))
             ax_footprint = fig.add_subplot(gs[:, 1])
             cmap = plt.cm.viridis
             sm = ax_footprint.scatter(*(pos[mask].T[:2, :]), c=flu[mask], cmap=cmap, s=1)
@@ -572,27 +574,34 @@ class efieldInterferometricDepthReco:
             ax_footprint.set_aspect("equal")
             ax_footprint.legend()
 
-            axes_trace = []
-            ax = None
-            for i in range(len(debug_sids)):
-                ax = fig.add_subplot(gs[i, 2], sharex=ax)
-                axes_trace.append(ax)
-                trace = debug_traces[i] / units.eV * units.m
-                time = debug_times[i] / units.ns
-                ax.plot(time, trace, color="navy", lw=.6)
-                ax.tick_params(labelsize="x-small")
-                # ax.set_title(f"Station {debug_sids[i]}, Channel Group {debug_cgids[i]}", fontsize="xx-small", loc="right")
+            # axes_trace = []
+            # ax = None
+            # for i in range(len(debug_sids)):
+            #     ax = fig.add_subplot(gs[i, 2], sharex=ax)
+            #     axes_trace.append(ax)
+            #     trace = debug_traces[i] / units.eV * units.m
+            #     time = debug_times[i] / units.ns
+            #     ax.plot(time, trace, color="navy", lw=.6)
+            #     ax.tick_params(labelsize="x-small")
+            #     ax.set_title(f"Station {debug_sids[i]}, Channel Group {debug_cgids[i]}", fontsize="xx-small", loc="right")
 
-            axwrap = fig.add_subplot(gs[:, 2], frameon=False)
-            axwrap.tick_params(labelcolor="none", which="both", top=False, bottom=False, left=False, right=False)
-            axwrap.set_xlabel(r"$t$ [ns]")
-            axwrap.set_ylabel(r"$E_{\mathbf{v}\times\mathbf{B}}$ [eV/m]", labelpad=5.0)
+            # axwrap = fig.add_subplot(gs[:, 2], frameon=False)
+            # axwrap.tick_params(labelcolor="none", which="both", top=False, bottom=False, left=False, right=False)
+            # axwrap.set_xlabel(r"$t$ [ns]")
+            # axwrap.set_ylabel(r"$E_{\mathbf{v}\times\mathbf{B}}$ [eV/m]", labelpad=5.0)
 
             plt.show()
 
         traces = traces[mask]
         times = times[mask]
         pos = pos[mask]
+        sids_for_rit = sids_for_rit[mask]
+
+        # lofar specific check
+        if 11 in sids_for_rit:
+            self._data["CS011_included"] = True
+        else:
+            self._data["CS011_included"] = False
 
         self._traces = traces
         self._times = times
@@ -984,6 +993,7 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                 logger.info(f"Opening angle with MC: {np.round(opening_angle_sph / units.deg, 3)} +- {np.round(opening_angle_sph_std / units.deg, 3)} deg")
 
             # add smaller planes sampled along inital rit axis to increase amount of points to fit final rit axis
+            depths2 = np.array([])
             if self._refine_axis:
                 old_debug = self._debug
                 self._debug = False
@@ -1025,6 +1035,9 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
 
             self._data[f"core_{regime_key}"] = {"opt": core_rec * units.m,
                                                 "std": core_std * units.m}
+            z, a = hp.cartesian_to_spherical(*direction_rec)
+            self._data[f"zenith_{regime_key}"] = z * units.rad
+            self._data[f"azimuth_{regime_key}"] = a * units.rad
             self._data[f"opening_angle_v0_{regime_key}"] = {"opt": opening_angle_sph * units.rad,
                                                             "std": opening_angle_sph_std * units.rad}
             self._data[f"found_points_{regime_key}"] = np.array(found_points)
@@ -1169,10 +1182,14 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         self.set_geometry(shower, core=core, axis=axis)
         self.update_atmospheric_model_and_refractivity_table()
 
-    def get_lateral_profile(self, p_axis: np.ndarray, xs: np.ndarray):
+    def get_lateral_profile(self, p_axis: np.ndarray, xs: np.ndarray, orientation: str = "vxB"):
+        assert orientation in ["vxB", "vxvxB"]
         signals = np.zeros(len(xs))
         for xdx, x in enumerate(tqdm(xs)):
-            p = p_axis + self._cs.transform_from_vxB_vxvxB(np.array([x, 0, 0]))
+            if orientation == "vxB":
+                p = p_axis + self._cs.transform_from_vxB_vxvxB(np.array([x, 0, 0]))
+            else:
+                p = p_axis + self._cs.transform_from_vxB_vxvxB(np.array([0, x, 0]))
 
             sum_trace = interferometry.interfere_traces_interpolation(
                 p, self._positions, self._traces, self._times, tab=self._tab)
@@ -1195,35 +1212,40 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         xs = np.hstack([np.geomspace(xlims[0], -dr_ref_target / 2, n), np.geomspace(dr_ref_target / 2, xlims[1], n)])
 
         lateral_vxB_profile = self.get_lateral_profile(p_max, xs)
+        lateral_vxvxB_profile = self.get_lateral_profile(p_max, xs, orientation="vxvxB")
 
-        # def lorentzian(x, gamma):
-        #     return weight / (1 + (x / gamma)**2)
-        # p, _ = curve_fit(lorentzian, xs, lateral_vxB_profile, p0=[50])
-        # fwhm_fit = p[0]
+        fwhm = {}
+        for orientation, profile in zip(["vxB", "vxvxB"], [lateral_vxB_profile, lateral_vxvxB_profile]):
+            # says half but is FW80%M
+            pk_half = scipy.signal.peak_widths(profile, [np.argmax(profile)], rel_height=.5)
 
-        pk_half = scipy.signal.peak_widths(lateral_vxB_profile,
-                                           [np.argmax(lateral_vxB_profile)],
-                                           rel_height=.5)
+            lips = pk_half[2][0]
+            rips = pk_half[3][0]
+            fwhm[f"fwhm_{orientation}"] = xs[round(rips)] - xs[round(lips)]
 
-        lips = pk_half[2][0]
-        rips = pk_half[3][0]
-        fwhm = xs[round(rips)] - xs[round(lips)]
+            pk_80 = scipy.signal.peak_widths(profile, [np.argmax(profile)], rel_height=.2)
 
-        if self._debug:
-            pk_full = scipy.signal.peak_widths(lateral_vxB_profile,
-                                               [np.argmax(lateral_vxB_profile)],
-                                               rel_height=1)
-            fwfm = xs[round(pk_full[3][0])] - xs[round(pk_full[2][0])]
-            ax = plt.figure().add_subplot()
-            ax.scatter(xs, lateral_vxB_profile, marker="v", s=1.2)
-            ax.set_xlabel(r"$x_{\mathbf{v}\times\mathbf{B}}$ [m]")
-            ax.set_ylabel(f"Summed {self._signal_kind}")
-            ax.hlines(pk_half[1][0], xs[round(pk_half[2][0])], xs[round(pk_half[3][0])], color="pink", label=f"FWHM {fwhm: .2f} m", lw=0.5, ls=":")
-            ax.hlines(pk_full[1][0], xs[round(pk_full[2][0])], xs[round(pk_full[3][0])], color="green", label=f"FWFM {fwfm: .2f} m", lw=0.1, ls=":")
-            # xs_linspace = np.linspace(xs[0], xs[-1], 1000)
-            # ax.plot(xs_linspace, lorentzian(xs_linspace, fwhm_fit), color="m", ls="--", lw=.8, label=f"Fit: FWHM = {fwhm_fit: .2f} m")
-            ax.legend()
-            plt.show()
+            lips = pk_80[2][0]
+            rips = pk_80[3][0]
+            fwhm[f"fw80m_{orientation}"] = xs[round(rips)] - xs[round(lips)]
+
+            if self._debug:
+                pk_full = scipy.signal.peak_widths(profile,
+                                                   [np.argmax(profile)],
+                                                   rel_height=1)
+                fwfm = xs[round(pk_full[3][0])] - xs[round(pk_full[2][0])]
+                ax = plt.figure().add_subplot()
+                ax.scatter(xs, profile, marker="v", s=1.2)
+                ax.set_xlabel(r"$x_{\mathbf{v}\times\mathbf{B}}$ [m]")
+                ax.set_ylabel(f"Summed {self._signal_kind}")
+                ax.hlines(pk_half[1][0], xs[round(pk_half[2][0])], xs[round(pk_half[3][0])], color="pink", label=f"FWHM {fwhm[f"fwhm_{orientation}"]: .2f} m", lw=2, ls="--")
+                ax.hlines(pk_80[1][0], xs[round(pk_80[2][0])], xs[round(pk_80[3][0])], color="orange", label=f"FW80M {fwhm[f"fw80m_{orientation}"]: .2f} m", lw=2, ls="--")
+                ax.hlines(pk_full[1][0], xs[round(pk_full[2][0])], xs[round(pk_full[3][0])], color="green", label=f"FWFM {fwfm: .2f} m", lw=1, ls=":")
+                ax.set_title(f"Orientation: {orientation}")
+                # xs_linspace = np.linspace(xs[0], xs[-1], 1000)
+                # ax.plot(xs_linspace, lorentzian(xs_linspace, fwhm_fit), color="m", ls="--", lw=.8, label=f"Fit: FWHM = {fwhm_fit: .2f} m")
+                ax.legend()
+                plt.show()
 
         return fwhm
 
@@ -1278,11 +1300,14 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
             depth = self._shower[shp.interferometric_shower_maximum]
 
         fwhm = self.find_fwhm(depth / units.g * units.cm2)
-        self._shower.set_parameter(shp.interferometric_fwhm, fwhm * units.m)
-        logger.info(f"Interferometric vxB FWHM at {depth / units.g * units.cm2: .2f} g/cm2: {fwhm: .2f} m")
+        self._shower.set_parameter(shp.interferometric_fwhm, fwhm["fwhm_vxB"] * units.m)
+        self._shower.set_parameter(shp.interferometric_fw80m_vxB, fwhm["fw80m_vxB"] * units.m)
+        self._shower.set_parameter(shp.interferometric_fw80m_vxvxB, fwhm["fw80m_vxvxB"] * units.m)
+        self._data.update(fwhm)
+        logger.info(f"Interferometric vxB FWHM at {depth / units.g * units.cm2: .2f} g/cm2: {fwhm["fwhm_vxB"]: .2f} m")
 
     def end(self):
-        pass
+        return self._data
 
 
 def plot_shower_axis_points(points: np.ndarray, weights: np.ndarray, shower: Optional[BaseShower] = None):

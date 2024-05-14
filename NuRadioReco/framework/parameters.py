@@ -126,6 +126,8 @@ class showerParameters(Enum):
     interferometric_shower_axis = 121  #: shower axis (direction) derived from beam-formed signal
     interferometric_core = 122  #: core (intersection of shower axis with obs plane) derived from beam-formed signal
     interferometric_fwhm = 123  #: vxB FWHM of lateral RIT profile at interferometric_shower_maximum
+    interferometric_fw80m_vxB = 124
+    interferometric_fw80m_vxvxB = 125
 
 
 class emitterParameters(Enum):
