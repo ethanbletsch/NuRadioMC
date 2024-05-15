@@ -617,10 +617,13 @@ class efieldInterferometricDepthReco:
             mc_core[2] = 0
             pos_showerplane = cs_shower.transform_to_vxB_vxvxB(
                 self._positions, core=mc_core)
-            max_vxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 0]))
-            max_vxvxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 1]))
-            self._data["max_vxB_baseline"] = max_vxB_baseline_proxy * units.m
-            self._data["max_vxvxB_baseline"] = max_vxvxB_baseline_proxy * units.m
+        else:
+            pos_showerplane = self._cs.transform_to_vxB_vxvxB(self._positions, core=self._core)
+
+        max_vxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 0]))
+        max_vxvxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 1]))
+        self._data["max_vxB_baseline"] = max_vxB_baseline_proxy * units.m
+        self._data["max_vxvxB_baseline"] = max_vxvxB_baseline_proxy * units.m
 
 
 class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
@@ -942,7 +945,9 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
         for i in trange(self._iterations):
             p = []
             w = []
-            if i >= 1:
+            # only take random core and axis if efields are simulated (in which case MC geometry is likely set)
+            # or if more than one iteration has passed, whicch for data implies then passed geometry (e.g. particle arra) is actually used
+            if self._use_sim_pulses or i > 1:
                 self.set_geometry(self._shower, self._core0, self._axis0, self._axis_spread, self._core_spread)
             for depth in tqdm(self._depths):
                 found_point, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
@@ -1238,8 +1243,8 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
                 ax.scatter(xs, profile, marker="v", s=1.2)
                 ax.set_xlabel(r"$x_{\mathbf{v}\times\mathbf{B}}$ [m]")
                 ax.set_ylabel(f"Summed {self._signal_kind}")
-                ax.hlines(pk_half[1][0], xs[round(pk_half[2][0])], xs[round(pk_half[3][0])], color="pink", label=f"FWHM {fwhm[f"fwhm_{orientation}"]: .2f} m", lw=2, ls="--")
-                ax.hlines(pk_80[1][0], xs[round(pk_80[2][0])], xs[round(pk_80[3][0])], color="orange", label=f"FW80M {fwhm[f"fw80m_{orientation}"]: .2f} m", lw=2, ls="--")
+                ax.hlines(pk_half[1][0], xs[round(pk_half[2][0])], xs[round(pk_half[3][0])], color="pink", label=f"FWHM {fwhm[f'fwhm_{orientation}']: .2f} m", lw=2, ls="--")
+                ax.hlines(pk_80[1][0], xs[round(pk_80[2][0])], xs[round(pk_80[3][0])], color="orange", label=f"FW80M {fwhm[f'fw80m_{orientation}']: .2f} m", lw=2, ls="--")
                 ax.hlines(pk_full[1][0], xs[round(pk_full[2][0])], xs[round(pk_full[3][0])], color="green", label=f"FWFM {fwfm: .2f} m", lw=1, ls=":")
                 ax.set_title(f"Orientation: {orientation}")
                 # xs_linspace = np.linspace(xs[0], xs[-1], 1000)
@@ -1304,7 +1309,7 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         self._shower.set_parameter(shp.interferometric_fw80m_vxB, fwhm["fw80m_vxB"] * units.m)
         self._shower.set_parameter(shp.interferometric_fw80m_vxvxB, fwhm["fw80m_vxvxB"] * units.m)
         self._data.update(fwhm)
-        logger.info(f"Interferometric vxB FWHM at {depth / units.g * units.cm2: .2f} g/cm2: {fwhm["fwhm_vxB"]: .2f} m")
+        logger.info(f"Interferometric vxB FWHM at {depth / units.g * units.cm2: .2f} g/cm2: {fwhm['fwhm_vxB']: .2f} m")
 
     def end(self):
         return self._data
