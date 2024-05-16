@@ -852,14 +852,21 @@ class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
                        initial_grid_spacing, initial_grid_spacing)
 
         iloop = 0
-        xh, yh, sh = [], [], []  # history
+        # xh, yh, sh = [], [], []  # history
+        # xy = []
+        # rw = []
+        # rh = []
         while True:
             idx, signals = self.find_maximum_in_plane(xs, ys, p_axis, cs)
+            # xy.append((min(xs), min(ys)))
+            # rw.append(max(xs) - min(xs))
+            # rh.append(max(ys) - min(ys))
 
-            xh.append(xs)
-            yh.append(ys)
-            sh.append(signals)
-
+            # xh.append(xs)
+            # yh.append(ys)
+            # sh.append(signals)
+            # xx, yy = np.meshgrid(xs, ys)
+            # exit()
             if self._debug:
                 if self._use_sim_pulses:
                     axis0_intersect_vB = mc_vB
@@ -1205,13 +1212,15 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
         return signals
 
     def find_fwhm(self, depth: float):
+        old_debug = self._debug
+        self._debug = False
         p_max, weight, ground_grid_uncertainty = self.sample_lateral_cross_section(
             depth, self._core, self._axis, self._cross_section_width, self._initial_grid_spacing)
+        self._debug = old_debug
 
         _, dr_ref_target = self.get_paxis_dr_target(depth, self._core, self._axis)
         max_dist = self._lateral_vxB_width / 2
         xlims = np.array([-max_dist, max_dist])
-        # xs = np.linspace(*xlims, self._lateral_sample_count)
 
         n = self._lateral_vxB_sample_count // 2
         xs = np.hstack([np.geomspace(xlims[0], -dr_ref_target / 2, n), np.geomspace(dr_ref_target / 2, xlims[1], n)])
@@ -1221,7 +1230,6 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
 
         fwhm = {}
         for orientation, profile in zip(["vxB", "vxvxB"], [lateral_vxB_profile, lateral_vxvxB_profile]):
-            # says half but is FW80%M
             pk_half = scipy.signal.peak_widths(profile, [np.argmax(profile)], rel_height=.5)
 
             lips = pk_half[2][0]
@@ -1234,22 +1242,27 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
             rips = pk_80[3][0]
             fwhm[f"fw80m_{orientation}"] = xs[round(rips)] - xs[round(lips)]
 
+            orientation_labels = {"vxB": r"$\mathbf{v}\times\mathbf{B}$", "vxvxB": r"$\mathbf{v}\times\mathbf{v}\times\mathbf{B}$"}
             if self._debug:
-                pk_full = scipy.signal.peak_widths(profile,
-                                                   [np.argmax(profile)],
-                                                   rel_height=1)
-                fwfm = xs[round(pk_full[3][0])] - xs[round(pk_full[2][0])]
-                ax = plt.figure().add_subplot()
-                ax.scatter(xs, profile, marker="v", s=1.2)
-                ax.set_xlabel(r"$x_{\mathbf{v}\times\mathbf{B}}$ [m]")
-                ax.set_ylabel(f"Summed {self._signal_kind}")
-                ax.hlines(pk_half[1][0], xs[round(pk_half[2][0])], xs[round(pk_half[3][0])], color="pink", label=f"FWHM {fwhm[f'fwhm_{orientation}']: .2f} m", lw=2, ls="--")
-                ax.hlines(pk_80[1][0], xs[round(pk_80[2][0])], xs[round(pk_80[3][0])], color="orange", label=f"FW80M {fwhm[f'fw80m_{orientation}']: .2f} m", lw=2, ls="--")
-                ax.hlines(pk_full[1][0], xs[round(pk_full[2][0])], xs[round(pk_full[3][0])], color="green", label=f"FWFM {fwfm: .2f} m", lw=1, ls=":")
-                ax.set_title(f"Orientation: {orientation}")
-                # xs_linspace = np.linspace(xs[0], xs[-1], 1000)
-                # ax.plot(xs_linspace, lorentzian(xs_linspace, fwhm_fit), color="m", ls="--", lw=.8, label=f"Fit: FWHM = {fwhm_fit: .2f} m")
-                ax.legend()
+                # pk_full = scipy.signal.peak_widths(profile,
+                #                                    [np.argmax(profile)],
+                #                                    rel_height=1)
+                # fwfm = xs[round(pk_full[3][0])] - xs[round(pk_full[2][0])]
+                profile_normalized = profile / max(profile)
+                ax = plt.figure(figsize=(3.4, 3.4)).add_subplot()
+
+                ax.scatter(xs, profile_normalized, marker="v", s=1.)
+                if orientation == "vxB":
+                    ax.set_xlabel(r"$x_{\mathbf{v}\times\mathbf{B}}$ [m]")
+                elif orientation == "vxvxB":
+                    ax.set_xlabel(r"$y_{\mathbf{v}\times\mathbf{v}\times\mathbf{B}}$ [m]")
+                ax.set_ylabel("Fluence (normalized)")
+                ax.hlines(pk_half[1][0] / max(profile), xs[round(pk_half[2][0])], xs[round(pk_half[3][0])], color="red", label=f"FWHM {fwhm[f"fwhm_{orientation}"]: .2f} m", lw=0.8, ls="-")
+                ax.hlines(pk_80[1][0] / max(profile), xs[round(pk_80[2][0])], xs[round(pk_80[3][0])], color="green", label=f"FW80M {fwhm[f"fw80m_{orientation}"]: .2f} m", lw=0.8, ls="-")
+                # ax.hlines(pk_full[1][0], xs[round(pk_full[2][0])], xs[round(pk_full[3][0])], color="green", label=f"FWFM {fwfm: .2f} m", lw=1, ls=":")
+                ax.set_title("Orientation: " + orientation_labels[orientation], loc="left")
+                ax.legend(fontsize="small", loc="lower right")
+                ax.set_xlim(-500, 500)
                 plt.show()
 
         return fwhm
