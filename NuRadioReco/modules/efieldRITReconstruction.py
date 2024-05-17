@@ -478,7 +478,8 @@ class efieldInterferometricDepthReco:
                                                      + det.get_relative_position(sid, cid)),
                                                     station.get_channel(cid).get_times(),
                                                     station.get_channel(cid).get_trace(),
-                                                    sid, det.get_channel_group_id(sid, cid))
+                                                    # sid, det.get_channel_group_id(sid, cid)
+                                                    )
                                                    for cid in station.get_channel_ids()
                                                    if np.all(np.abs(det.get_antenna_orientation(sid, cid) - strongest_pol_overall) < 1e-6)]
         else:
@@ -499,7 +500,8 @@ class efieldInterferometricDepthReco:
                 positions_and_times_and_traces += [(electric_field.get_position(),
                                                     electric_field.get_times(),
                                                     self._cs.transform_to_vxB_vxvxB(electric_field.get_trace())[0],
-                                                    sid, det.get_channel_group_id(sid, electric_field.get_channel_ids()[0]))
+                                                    # sid, det.get_channel_group_id(sid, electric_field.get_channel_ids()[0])
+                                                    )
                                                    for electric_field in station.get_electric_fields()]
 
         # debug_sids = [2, 3, 6, 7]
@@ -511,7 +513,8 @@ class efieldInterferometricDepthReco:
         warned_early = False
         warned_late = False
         sids_for_rit = []
-        for position, time, trace, sid, cgid in positions_and_times_and_traces:
+        # for position, time, trace, sid, cgid in positions_and_times_and_traces:
+        for position, time, trace in positions_and_times_and_traces:
             if self._use_sim_pulses and self._mc_jitter > 0:
                 time += np.random.normal(scale=self._mc_jitter)
 
