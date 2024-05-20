@@ -477,7 +477,7 @@ class efieldInterferometricDepthReco:
                                                      + det.get_relative_position(sid, cid)),
                                                     station.get_channel(cid).get_times(),
                                                     station.get_channel(cid).get_trace(),
-                                                    # sid, det.get_channel_group_id(sid, cid)
+                                                    sid,
                                                     )
                                                    for cid in station.get_channel_ids()
                                                    if np.all(np.abs(det.get_antenna_orientation(sid, cid) - strongest_pol_overall) < 1e-6)]
@@ -499,7 +499,7 @@ class efieldInterferometricDepthReco:
                 positions_and_times_and_traces += [(electric_field.get_position(),
                                                     electric_field.get_times(),
                                                     self._cs.transform_to_vxB_vxvxB(electric_field.get_trace())[0],
-                                                    # sid, det.get_channel_group_id(sid, electric_field.get_channel_ids()[0])
+                                                    sid,
                                                     )
                                                    for electric_field in station.get_electric_fields()]
 
@@ -511,8 +511,9 @@ class efieldInterferometricDepthReco:
         self._tstep = positions_and_times_and_traces[0][1][1] - positions_and_times_and_traces[0][1][0]
         warned_early = False
         warned_late = False
+        sids_rit = []
         # for position, time, trace, sid, cgid in positions_and_times_and_traces:
-        for position, time, trace in positions_and_times_and_traces:
+        for position, time, trace, sid in positions_and_times_and_traces:
             if self._use_sim_pulses and self._mc_jitter > 0:
                 time += np.random.normal(scale=self._mc_jitter)
 
@@ -538,6 +539,7 @@ class efieldInterferometricDepthReco:
             traces.append(trace)
             times.append(time)
             pos.append(position)
+            sids_rit.append(sid)
 
             # if sid in debug_sids and cgid in debug_cgids:
             #     debug_times.append(time)
@@ -546,14 +548,14 @@ class efieldInterferometricDepthReco:
         traces = np.array(traces)
         times = np.array(times)
         pos = np.array(pos)
+        sids_rit = np.array(sids_rit)
         assert not np.all(pos[:, :2] == 0)  # efield positions are set to [0, 0, 0] in voltageToEfieldConverter. This should protect against such behaviour.
 
-        flu = np.sum(traces ** 2, axis=-1)
+        # Mask traces with too low fluence
+        power = traces**2
+        flu = np.sum(power, axis=-1)
         mask = (flu >= self._signal_threshold * np.max(flu))
-        logger.info(f"{np.round(np.sum(mask) / len(mask) * 100, 3)}% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
-
-        spheric = hp.cartesian_to_spherical(*self._axis)
-        logger.info(f"Zenith {spheric[0] / units.deg: .2f}, azimuth {spheric[1] / units.deg: .2f}")
+        logger.info(f"{np.sum(mask) / len(mask) * 100: .3f}% of trace_vector used for RIT with relative fluence above {self._signal_threshold}")
 
         debug_sids = [None]
         if self._debug:
@@ -572,33 +574,52 @@ class efieldInterferometricDepthReco:
             ax_footprint.tick_params(top=True, right=True)
             ax_footprint.set_aspect("equal")
             ax_footprint.legend()
-
-            # axes_trace = []
-            # ax = None
-            # for i in range(len(debug_sids)):
-            #     ax = fig.add_subplot(gs[i, 2], sharex=ax)
-            #     axes_trace.append(ax)
-            #     trace = debug_traces[i] / units.eV * units.m
-            #     time = debug_times[i] / units.ns
-            #     ax.plot(time, trace, color="navy", lw=.6)
-            #     ax.tick_params(labelsize="x-small")
-            #     ax.set_title(f"Station {debug_sids[i]}, Channel Group {debug_cgids[i]}", fontsize="xx-small", loc="right")
-
-            # axwrap = fig.add_subplot(gs[:, 2], frameon=False)
-            # axwrap.tick_params(labelcolor="none", which="both", top=False, bottom=False, left=False, right=False)
-            # axwrap.set_xlabel(r"$t$ [ns]")
-            # axwrap.set_ylabel(r"$E_{\mathbf{v}\times\mathbf{B}}$ [eV/m]", labelpad=5.0)
-
             plt.show()
 
         traces = traces[mask]
         times = times[mask]
         pos = pos[mask]
+        flu = flu[mask]
+        power = power[mask]
+        sids_rit = np.unique(sids_rit[mask])
+        self._data["station_set"] = str(sids_rit)[1:-1]  # sorted integesrs seperated by spaces, with the brackets [] removed
 
         self._traces = traces
         self._times = times
         self._positions = pos
 
+        # To get an estimate of the width of the pulse, use the power FWHM
+        pk_trace = np.array([scipy.signal.peak_widths(tr, [np.argmax(tr)], rel_height=.5)[0][0] for tr in traces])
+        pk_trace *= self._tstep
+        pk_trace_weighted_average = np.average(pk_trace, weights=flu)
+        if self._debug:
+            pk_trace_median = np.median(pk_trace)
+            pk_trace_mean = np.mean(pk_trace)
+            fig = plt.figure()
+            ax: plt.Axes = fig.add_subplot()
+            ax.hist(pk_trace, histtype="step", bins="fd")
+            ax.set_xlabel("Bin FWHM [ns]")
+            ax.set_ylabel("Counts")
+            ylims = ax.get_ylim()
+            ax.vlines(pk_trace_median, *ylims, label="median", color="c")
+            ax.vlines(pk_trace_mean, *ylims, label="mean", color="y")
+            ax.vlines(pk_trace_weighted_average, *ylims, label="weighted average", color="m")
+            ax.set_ylim(*ylims)
+            ax.legend()
+            plt.show()
+
+        self._data["weighted_average_pulse_fwhm"] = pk_trace_weighted_average
+        self._data["weighted_std_pulse_fwhm"] = np.sqrt(np.average((pk_trace - pk_trace_weighted_average)**2, weights=flu))
+
+        # Weighted Average position, assuming z=0
+        avg_x = np.average(pos[:, 0], weights=flu)
+        avg_y = np.average(pos[:, 1], weights=flu)
+        avg_pos_azimuth = hp.cartesian_to_spherical(avg_x, avg_y, 0)[1]
+
+        self._data["avg_pos_radius"] = np.sqrt(avg_x**2 + avg_y**2) * units.m
+        self._data["avg_pos_azimuth"] = avg_pos_azimuth * units.radian
+
+        # Get the baselines, with MC geometry if available
         if self._use_sim_pulses:
             cs_shower = coordinatesystems.cstrafo(
                 self._shower[shp.zenith], self._shower[shp.azimuth], magnetic_field_vector=self._shower[shp.magnetic_field_vector])
@@ -636,7 +657,6 @@ class efieldInterferometricDepthReco:
         self._data["max_northsouth_baseline"] = max(ground_baselines[:, 1]) * units.m
 
         self._data["n_observers"] = len(self._positions)
-        flu = flu[mask]
         self._data["max_fluence_fraction"] = np.max(flu) / np.sum(flu)
 
 
