@@ -18,7 +18,6 @@ from matplotlib import gridspec, colorbar
 from scipy.optimize import curve_fit
 
 from typing import Optional
-from collections import defaultdict
 
 from tqdm import tqdm, trange
 from os import cpu_count
@@ -512,7 +511,6 @@ class efieldInterferometricDepthReco:
         self._tstep = positions_and_times_and_traces[0][1][1] - positions_and_times_and_traces[0][1][0]
         warned_early = False
         warned_late = False
-        sids_for_rit = []
         # for position, time, trace, sid, cgid in positions_and_times_and_traces:
         for position, time, trace in positions_and_times_and_traces:
             if self._use_sim_pulses and self._mc_jitter > 0:
@@ -540,7 +538,6 @@ class efieldInterferometricDepthReco:
             traces.append(trace)
             times.append(time)
             pos.append(position)
-            sids_for_rit.append(sid)
 
             # if sid in debug_sids and cgid in debug_cgids:
             #     debug_times.append(time)
@@ -549,7 +546,6 @@ class efieldInterferometricDepthReco:
         traces = np.array(traces)
         times = np.array(times)
         pos = np.array(pos)
-        sids_for_rit = np.array(sids_for_rit)
         assert not np.all(pos[:, :2] == 0)  # efield positions are set to [0, 0, 0] in voltageToEfieldConverter. This should protect against such behaviour.
 
         flu = np.sum(traces ** 2, axis=-1)
@@ -598,13 +594,6 @@ class efieldInterferometricDepthReco:
         traces = traces[mask]
         times = times[mask]
         pos = pos[mask]
-        sids_for_rit = sids_for_rit[mask]
-
-        # lofar specific check
-        if 11 in sids_for_rit:
-            self._data["CS011_included"] = True
-        else:
-            self._data["CS011_included"] = False
 
         self._traces = traces
         self._times = times
@@ -623,10 +612,32 @@ class efieldInterferometricDepthReco:
         else:
             pos_showerplane = self._cs.transform_to_vxB_vxvxB(self._positions, core=self._core)
 
-        max_vxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 0]))
-        max_vxvxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 1]))
-        self._data["max_vxB_baseline"] = max_vxB_baseline_proxy * units.m
-        self._data["max_vxvxB_baseline"] = max_vxvxB_baseline_proxy * units.m
+        # max_vxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 0]))
+        # max_vxvxB_baseline_proxy = np.amax(np.abs(pos_showerplane[:, 1]))
+
+        def get_baselines(positions):
+            n = len(positions)
+            baselines = np.empty((n*(n-1)//2, 3))
+            counter = 0
+            for i in range(n-1):
+                for j in range(i+1, n):
+                    baselines[counter] = (positions[i] - positions[j])
+                    counter += 1
+            assert counter == n * (n-1) / 2
+            return np.abs(baselines)
+
+        showerplane_baselines = get_baselines(pos_showerplane)
+        ground_baselines = get_baselines(pos)
+
+        self._data["max_vxB_baseline"] = max(showerplane_baselines[:, 0]) * units.m
+        self._data["max_vxvxB_baseline"] = max(showerplane_baselines[:, 1]) * units.m
+
+        self._data["max_eastwest_baseline"] = max(ground_baselines[:, 0]) * units.m
+        self._data["max_northsouth_baseline"] = max(ground_baselines[:, 1]) * units.m
+
+        self._data["n_observers"] = len(self._positions)
+        flu = flu[mask]
+        self._data["max_fluence_fraction"] = np.max(flu) / np.sum(flu)
 
 
 class efieldInterferometricAxisReco(efieldInterferometricDepthReco):
@@ -1260,8 +1271,8 @@ class efieldInterferometricLateralReco(efieldInterferometricAxisReco):
                 elif orientation == "vxvxB":
                     ax.set_xlabel(r"$y_{\mathbf{v}\times\mathbf{v}\times\mathbf{B}}$ [m]")
                 ax.set_ylabel("Fluence (normalized)")
-                ax.hlines(pk_half[1][0] / max(profile), xs[round(pk_half[2][0])], xs[round(pk_half[3][0])], color="red", label=f"FWHM {fwhm[f"fwhm_{orientation}"]: .2f} m", lw=0.8, ls="-")
-                ax.hlines(pk_80[1][0] / max(profile), xs[round(pk_80[2][0])], xs[round(pk_80[3][0])], color="green", label=f"FW80M {fwhm[f"fw80m_{orientation}"]: .2f} m", lw=0.8, ls="-")
+                ax.hlines(pk_half[1][0] / max(profile), xs[round(pk_half[2][0])], xs[round(pk_half[3][0])], color="red", label=f"FWHM {fwhm[f'fwhm_{orientation}']: .2f} m", lw=0.8, ls="-")
+                ax.hlines(pk_80[1][0] / max(profile), xs[round(pk_80[2][0])], xs[round(pk_80[3][0])], color="green", label=f"FW80M {fwhm[f'fw80m_{orientation}']: .2f} m", lw=0.8, ls="-")
                 # ax.hlines(pk_full[1][0], xs[round(pk_full[2][0])], xs[round(pk_full[3][0])], color="green", label=f"FWFM {fwfm: .2f} m", lw=1, ls=":")
                 ax.set_title("Orientation: " + orientation_labels[orientation], loc="left")
                 ax.legend(fontsize="small", loc="lower right")
@@ -1624,37 +1635,3 @@ def opening_angle_spherical(theta1, phi1, theta2, phi2, theta1_var, phi1_var):
     opening_angle_var = (1/(1-arg**2)) * ((c1*s2*c12 - s1*c2)
                                           ** 2 * theta1_var + (s1*s2*s12)**2 * phi1_var)
     return opening_angle_opt, opening_angle_var
-
-
-def select_channels_per_station(det: DetectorBase, station_id: int,
-                                requested_channel_ids: Optional[list] = None) -> defaultdict:
-    # TODO: centralize this function which is a copy from readCoREASInterpolator, and replace the usage of this one.
-    """
-
-    Returns a defaultdict object containing the requeasted channel ids that are in the given station.
-    This dict contains the channel group ids as keys with lists of channel ids as values.
-
-    Parameters
-    ----------
-    det : DetectorBase
-        The detector object that contains the station
-    station_id : int
-        The station id to select channels from
-    requested_channel_ids : list
-        List of requested channel ids
-    """
-    if requested_channel_ids is None:
-        requested_channel_ids = det.get_channel_ids(station_id)
-    else:
-        # ensure ordering as coming from det
-        requested_channel_ids = [id for id in det.get_channel_ids(station_id) if id in requested_channel_ids]
-
-    channel_ids = defaultdict(list)
-    for channel_id in requested_channel_ids:
-        if channel_id in det.get_channel_ids(station_id):
-            channel_group_id = det.get_channel_group_id(station_id, channel_id)
-            if channel_group_id == -1:
-                channel_group_id = channel_id
-            channel_ids[channel_group_id].append(channel_id)
-
-    return channel_ids
