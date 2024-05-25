@@ -28,7 +28,7 @@ class readCoREASInterpolator:
                  kind: str = "trace",
                  interpolator_kwargs: dict = None,
                  ):
-        logger.setLevel(logger_level)
+        # logger.setLevel(logger_level)
 
         self.lowfreq = lowfreq
         self.highfreq = highfreq
@@ -408,6 +408,7 @@ class readCoREASComponentInterpolator(readCoREASInterpolator):
         converts both to the correct coordinate system and units.
         """
         assert self.corsika is not None and self.cs is not None
+        assert component in ["geomagnetic", "charge"]
 
         starpos_vvB = []
         signal_dict = {}
@@ -423,11 +424,11 @@ class readCoREASComponentInterpolator(readCoREASInterpolator):
                 )
             )
             starpos_vvB.append(position_vvB)
+            nrr_observer = coreas.observer_to_si_geomagnetic(observer)
+            trace_start_times.append(nrr_observer[0, 0])
 
             # Only consider antenna if on positive vxvxB axis
-            if np.abs(position_vvB[0]) < 20 * units.cm and position_vvB[0] > 0:
-                nrr_observer = coreas.observer_to_si_geomagnetic(observer)
-                trace_start_times.append(nrr_observer[0, 0])
+            if np.abs(position_vvB[0]) < 20 * units.cm and position_vvB[1] > 0:
                 signal = self.cs.transform_from_magnetic_to_geographic(
                     nrr_observer[:, 1:].T)
                 signal_vvB = self.cs.transform_to_vxB_vxvxB(
@@ -441,8 +442,8 @@ class readCoREASComponentInterpolator(readCoREASInterpolator):
                 elif component == 'charge':
                     signal = self.geo_ce_to_signal(position_vvB, np.zeros_like(signal_geo), signal_ce)
 
-                signal = self.cs.transform_from_vxB_vxvxB(signal)
-                signal = self.cs.transform_from_ground_to_onsky(signal.T)
+                signal = self.cs.transform_from_vxB_vxvxB(signal.T)
+                signal = self.cs.transform_from_ground_to_onsky(signal)
 
                 if self.kind == "fluence":
                     filter_response = bandpass_filter.get_filter_response(
@@ -469,14 +470,12 @@ class readCoREASComponentInterpolator(readCoREASInterpolator):
         # Make signal array containing the signals for all the positions,
         # by copying over the data from the vxvxB arm
         signals = []
-        trace_start = []
         signals_per_distance = np.array(list(signal_dict.values()))
         for pos in starpos_vvB:
             distance_to_shower_axis = np.around((pos[0] ** 2 + pos[1] ** 2) ** 0.5, 1)
             distance_index = np.argmin(np.abs(np.array(list(signal_dict.keys())) - distance_to_shower_axis))
             signals.append(signals_per_distance[distance_index])
-            trace_start.append(trace_start_times[distance_index])
 
         self.starshape_showerplane = starpos_vvB
         self.signals = np.array(signals)
-        self.trace_start = np.array(trace_start)
+        self.trace_start = np.array(trace_start_times)

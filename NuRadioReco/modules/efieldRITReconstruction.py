@@ -592,7 +592,7 @@ class efieldInterferometricDepthReco:
         pk_trace = np.array([scipy.signal.peak_widths(tr, [np.argmax(tr)], rel_height=.5)[0][0] for tr in traces])
         pk_trace *= self._tstep
         pk_trace_weighted_average = np.average(pk_trace, weights=flu)
-        if self._debug:
+        if False:
             pk_trace_median = np.median(pk_trace)
             pk_trace_mean = np.mean(pk_trace)
             fig = plt.figure()
